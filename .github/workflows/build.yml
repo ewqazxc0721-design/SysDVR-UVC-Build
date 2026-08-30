@@ -1,6 +1,8 @@
 name: Build SysDVR-UVC-Capture
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
