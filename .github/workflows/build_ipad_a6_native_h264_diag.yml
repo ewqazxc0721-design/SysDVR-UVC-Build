@@ -1,0 +1,208 @@
+name: Build SysDVR-UVC iPad A6 Native H264 DIAG
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone exact upstream baseline
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a6
+          cd /work/a6
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply native UVC 1.5 H264 descriptor patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a6/source/uvc/uvc_device.c')
+          s = p.read_text()
+
+          start = s.index('// Video Streaming Class-Specific Descriptors\n')
+          end = s.index('// Bulk endpoint for video streaming\n', start)
+
+          replacement = '''// Video Streaming Class-Specific Descriptors
+// A6: native UVC 1.5 H.264 format/frame descriptors. All device-level USB,
+// BOS, SuperSpeed, interface topology and bulk endpoint behavior remain A5/upstream.
+static struct __attribute__((packed)) {
+    UvcVsInputHeaderDescriptor inputHeader;
+    UvcFormatH264Descriptor h264Format;
+    UvcFrameH264Descriptor h264Frame;
+    UvcColorMatchingDescriptor colorMatching;
+} g_vsDescriptors = {
+    .inputHeader = {
+        .bLength = sizeof(UvcVsInputHeaderDescriptor),
+        .bDescriptorType = UVC_CS_INTERFACE,
+        .bDescriptorSubType = UVC_VS_INPUT_HEADER,
+        .bNumFormats = 1,
+        .wTotalLength = sizeof(g_vsDescriptors),
+        .bEndpointAddress = USB_ENDPOINT_IN | 1,
+        .bmInfo = 0,
+        .bTerminalLink = UVC_ENTITY_OUTPUT_TERMINAL,
+        .bStillCaptureMethod = 0,
+        .bTriggerSupport = 0,
+        .bTriggerUsage = 0,
+        .bControlSize = 1,
+        .bmaControls1 = 0,
+    },
+    .h264Format = {
+        .bLength = sizeof(UvcFormatH264Descriptor),
+        .bDescriptorType = UVC_CS_INTERFACE,
+        .bDescriptorSubType = UVC_VS_FORMAT_H264,
+        .bFormatIndex = 1,
+        .bNumFrameDescriptors = 1,
+        .bDefaultFrameIndex = 1,
+        .bMaxCodecConfigDelay = 1,
+        .bmSupportedSliceModes = 0,
+        .bmSupportedSyncFrameTypes = 0x03,
+        .bResolutionScaling = 0,
+        .Reserved1 = 0,
+        .bmSupportedRateControlModes = 0x01,
+        .wMaxMBperSecOneResolutionNoScalability = 108,
+    },
+    .h264Frame = {
+        .bLength = sizeof(UvcFrameH264Descriptor),
+        .bDescriptorType = UVC_CS_INTERFACE,
+        .bDescriptorSubType = UVC_VS_FRAME_H264,
+        .bFrameIndex = 1,
+        .wWidth = UVC_VIDEO_WIDTH,
+        .wHeight = UVC_VIDEO_HEIGHT,
+        .wSARwidth = 1,
+        .wSARheight = 1,
+        .wProfile = 0x640C,
+        .bLevelIDC = 0x20,
+        .wConstrainedToolset = 0,
+        .bmSupportedUsages = 0x00010003,
+        .bmCapabilities = 0x002A,
+        .bmSVCCapabilities = 0,
+        .bmMVCCapabilities = 0,
+        .dwMinBitRate = UVC_MIN_BITRATE,
+        .dwMaxBitRate = UVC_MAX_BITRATE,
+        .dwDefaultFrameInterval = UVC_FRAME_INTERVAL_30FPS,
+        .bNumFrameIntervals = 1,
+        .dwFrameInterval1 = UVC_FRAME_INTERVAL_30FPS,
+    },
+    .colorMatching = {
+        .bLength = sizeof(UvcColorMatchingDescriptor),
+        .bDescriptorType = UVC_CS_INTERFACE,
+        .bDescriptorSubType = UVC_VS_COLORFORMAT,
+        .bColorPrimaries = 1,
+        .bTransferCharacteristics = 1,
+        .bMatrixCoefficients = 4,
+    },
+};
+
+'''
+          s = s[:start] + replacement + s[end:]
+
+          old = "    ctrl->bPreferedVersion = 1;\n    ctrl->bMinVersion = 1;\n    ctrl->bMaxVersion = 1;\n"
+          new = old + "    ctrl->bUsage = 0x01;\n    ctrl->bBitDepthLuma = 8;\n    ctrl->bmSettings = 0x2A;\n    ctrl->bMaxNumberOfRefFramesPlus1 = 2;\n    ctrl->bmRateControlModes = 0x0001;\n    ctrl->bmLayoutPerStream = 0;\n"
+          if old not in s:
+              raise SystemExit('probe/commit anchor missing')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          if 'UVC_VS_FORMAT_H264' not in s or 'UVC_VS_FRAME_H264' not in s:
+              raise SystemExit('native H264 descriptor patch failed')
+          PY
+
+      - name: Add A6 raw USB state monitor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a6/source/sysmodule/main.c')
+          s = p.read_text()
+
+          marker = 'static volatile bool g_running = true;\n'
+          helper = '''\n\n// A6-DIAG: raw usb:ds state monitor; descriptor experiment is isolated to VS H.264.\nstatic const char* A6UsbStateName(UsbState state)\n{\n    switch (state) {\n        case UsbState_Detached:   return "Detached";\n        case UsbState_Attached:   return "Attached";\n        case UsbState_Powered:    return "Powered";\n        case UsbState_Default:    return "Default";\n        case UsbState_Address:    return "Address";\n        case UsbState_Configured: return "Configured";\n        case UsbState_Suspended:  return "Suspended";\n        default:                  return "Unknown";\n    }\n}\n'''
+          if marker not in s:
+              raise SystemExit('g_running marker missing')
+          s = s.replace(marker, marker + helper, 1)
+
+          old = '''    // Main thread just sleeps - all work is done in streaming threads\n    while (g_running) {\n        svcSleepThread(1E+9);  // 1 second\n    }\n'''
+          new = '''    LOG("A6-NATIVE-H264-DIAG raw USB monitor active (1ms poll, 1s heartbeat)\\n");\n    UsbState a6LastState = (UsbState)0xFF;\n    bool a6HaveState = false;\n    bool a6HadGetStateError = false;\n    u32 a6Heartbeat = 0;\n    u32 a6Sequence = 0;\n\n    while (g_running) {\n        UsbState state = UsbState_Detached;\n        Result stateRc = usbDsGetState(&state);\n\n        if (R_FAILED(stateRc)) {\n            if (!a6HadGetStateError) {\n                LOG("A6 USB get-state ERROR rc=0x%x\\n", stateRc);\n                a6HadGetStateError = true;\n            }\n        } else {\n            a6HadGetStateError = false;\n            if (!a6HaveState || state != a6LastState) {\n                UsbDeviceSpeed speed = UsbDeviceSpeed_None;\n                Result speedRc = usbDsGetSpeed(&speed);\n                LOG("A6 USB state #%u: %u (%s), speed=%u, speedRc=0x%x\\n",\n                    a6Sequence++, (unsigned)state, A6UsbStateName(state),\n                    (unsigned)speed, speedRc);\n                a6LastState = state;\n                a6HaveState = true;\n            }\n\n            if (++a6Heartbeat >= 1000) {\n                LOG("A6 heartbeat: state=%u (%s)\\n",\n                    (unsigned)state, A6UsbStateName(state));\n                a6Heartbeat = 0;\n            }\n        }\n\n        svcSleepThread(1E+6);\n    }\n'''
+          if old not in s:
+              raise SystemExit('main sleep loop marker missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Make FileLogging thread-safe
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a6/source/core.c')
+          s = p.read_text()
+
+          old = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\n'
+          new = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\nstatic Mutex g_fileLogMutex = 0;\n'
+          if old not in s:
+              raise SystemExit('file logging globals marker missing')
+          s = s.replace(old, new, 1)
+
+          start = s.index('void LogFunctionImpl(const char* fmt, ...)\n{', s.index('#elif FILE_LOGGING'))
+          end = s.index('\n}\n#endif', start) + 2
+          repl = '''void LogFunctionImpl(const char* fmt, ...)\n{\n    if (!g_sdMounted) return;\n\n    mutexLock(&g_fileLogMutex);\n\n    char buf[512];\n    va_list args;\n    va_start(args, fmt);\n    int len = vsnprintf(buf, sizeof(buf), fmt, args);\n    va_end(args);\n\n    if (len > 0) {\n        FsFile file;\n        if (R_SUCCEEDED(fsFsOpenFile(&g_sdCard, "/logfile.txt", FsOpenMode_Write | FsOpenMode_Append, &file))) {\n            s64 offset = 0;\n            fsFileGetSize(&file, &offset);\n            fsFileWrite(&file, offset, buf, len, FsWriteOption_Flush);\n            fsFileClose(&file);\n        }\n    }\n\n    mutexUnlock(&g_fileLogMutex);\n}'''
+          s = s[:start] + repl + s[end:]
+          p.write_text(s)
+          PY
+
+      - name: Verify A5 USB baseline and A6 native H264 isolation
+        run: |
+          set -e
+          cd /work/a6
+          grep -n 'usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super' source/uvc/uvc_device.c
+          grep -n 'usbDsSetBinaryObjectStore' source/uvc/uvc_device.c
+          grep -n 'Super Speed VC' source/uvc/uvc_device.c
+          grep -n 'Super Speed VS' source/uvc/uvc_device.c
+          grep -n 'UVC_VS_FORMAT_H264' source/uvc/uvc_device.c
+          grep -n 'UVC_VS_FRAME_H264' source/uvc/uvc_device.c
+          grep -n 'A6-NATIVE-H264-DIAG' source/sysmodule/main.c
+          if grep -n 'UVC_VS_FORMAT_FRAME_BASED' source/uvc/uvc_device.c; then
+            echo 'ERROR: generic frame-based H264 descriptor still active'
+            exit 1
+          fi
+          git diff -- source/uvc/uvc_device.c source/sysmodule/main.c source/core.c
+
+      - name: Build A6 Native H264 DIAG FileLogging
+        run: |
+          set -e
+          cd /work/a6
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a6/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a6
+          zip -r /out/SysDVR-UVC-iPad-A6_NATIVE_H264_DIAG_FileLogging.zip atmosphere
+
+      - name: Verify package
+        run: |
+          set -e
+          ls -lh /out/SysDVR-UVC-iPad-A6_NATIVE_H264_DIAG_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A6_NATIVE_H264_DIAG_FileLogging.zip
+
+      - name: Upload A6 Native H264 DIAG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A6-NATIVE-H264-DIAG-FileLogging
+          path: /out/SysDVR-UVC-iPad-A6_NATIVE_H264_DIAG_FileLogging.zip
+          if-no-files-found: error
