@@ -33,26 +33,33 @@ jobs:
           p = Path('/work/a3v1/source/uvc/uvc_device.c')
           s = p.read_text()
 
+          # Remove SuperSpeed device descriptor and BOS registration.
           start = s.index('    // Super Speed (USB 3.0)\n')
           end = s.index('    return 0;\n', start)
-          block = s[start:end]
-          bos_start = block.index('    // Super Speed (USB 3.0)\n')
-          block = '    // A3-V1: USB2-only for iPad compatibility. No SS device descriptor or BOS.\n'
-          s = s[:start] + block + s[end:]
+          s = s[:start] + '    // A3-V1: USB2-only for iPad compatibility. No SS device descriptor or BOS.\n' + s[end:]
 
+          # Remove SuperSpeed VC configuration data.
           ss_vc = '''    // Super Speed VC\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcInterfaceDesc, USB_DT_INTERFACE_SIZE));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcDescriptors, sizeof(g_vcDescriptors)));\n\n'''
           if ss_vc not in s:
               raise SystemExit('A3-V1 SuperSpeed VC block not found')
           s = s.replace(ss_vc, '    // A3-V1: SuperSpeed VC descriptors disabled.\n\n', 1)
 
+          # Remove SuperSpeed VS configuration data.
           ss_vs_start = s.index('    // Super Speed VS\n')
           ss_vs_end = s.index('    // Register the video endpoint on VS\n', ss_vs_start)
           s = s[:ss_vs_start] + '    // A3-V1: SuperSpeed VS descriptors disabled.\n\n' + s[ss_vs_end:]
+
+          # The SS companion descriptor is now intentionally unused; remove it
+          # so upstream -Werror=unused-variable does not fail the USB2-only build.
+          comp_start = s.index('// Super-speed endpoint companion\n')
+          comp_end = s.index('// ============================================================================\n// UAC', comp_start)
+          s = s[:comp_start] + '// A3-V1: SuperSpeed endpoint companion removed for USB2-only build.\n\n' + s[comp_end:]
 
           p.write_text(s)
           assert 'A3-V1: USB2-only' in s
           assert 'usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super' not in s
           assert 'usbDsSetBinaryObjectStore' not in s
+          assert 'g_ssCompanionDesc' not in s
           PY
           cd /work/a3v1
           git diff -- source/uvc/uvc_device.c
