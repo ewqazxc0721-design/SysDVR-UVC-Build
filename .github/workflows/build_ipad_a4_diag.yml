@@ -30,25 +30,19 @@ jobs:
           from pathlib import Path
           p = Path('/work/a4/source/uvc/uvc_device.c')
           s = p.read_text()
-
           start = s.index('    // Super Speed (USB 3.0)\n')
           end = s.index('    return 0;\n', start)
           s = s[:start] + '    // A4-DIAG: USB2-only baseline. No SS device descriptor or BOS.\n' + s[end:]
-
-          ss_vc = '''    // Super Speed VC\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcInterfaceDesc, USB_DT_INTERFACE_SIZE));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcDescriptors, sizeof(g_vcDescriptors)));\n\n'''
+          ss_vc = '    // Super Speed VC\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcInterfaceDesc, USB_DT_INTERFACE_SIZE));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcDescriptors, sizeof(g_vcDescriptors)));\n\n'
           if ss_vc not in s:
               raise SystemExit('A4 SuperSpeed VC block not found')
           s = s.replace(ss_vc, '    // A4-DIAG: SuperSpeed VC descriptors disabled.\n\n', 1)
-
           ss_vs_start = s.index('    // Super Speed VS\n')
           ss_vs_end = s.index('    // Register the video endpoint on VS\n', ss_vs_start)
           s = s[:ss_vs_start] + '    // A4-DIAG: SuperSpeed VS descriptors disabled.\n\n' + s[ss_vs_end:]
-
-          # Removing SS path leaves this static descriptor unused under -Werror.
           comp_start = s.index('// Super-speed endpoint companion\n')
           comp_end = s.index('// ============================================================================\n// UAC (Audio) Descriptor Data', comp_start)
           s = s[:comp_start] + '// A4-DIAG: SuperSpeed endpoint companion removed with SS path.\n\n' + s[comp_end:]
-
           p.write_text(s)
           assert 'A4-DIAG: USB2-only baseline' in s
           assert 'usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super' not in s
@@ -61,77 +55,69 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import textwrap
           p = Path('/work/a4/source/sysmodule/main.c')
           s = p.read_text()
-
           marker = 'static volatile bool g_running = true;\n'
-          helper = r'''
-
-// A4-DIAG: raw usb:ds state monitor. These are the USB 2.0 device states
-// exposed by libnx: Detached=0, Attached=1, Powered=2, Default=3,
-// Address=4, Configured=5, Suspended=6.
-static const char* A4UsbStateName(UsbState state)
-{
-    switch (state) {
-        case UsbState_Detached:   return "Detached";
-        case UsbState_Attached:   return "Attached";
-        case UsbState_Powered:    return "Powered";
-        case UsbState_Default:    return "Default";
-        case UsbState_Address:    return "Address";
-        case UsbState_Configured: return "Configured";
-        case UsbState_Suspended:  return "Suspended";
-        default:                  return "Unknown";
-    }
-}
-'''
+          helper = textwrap.dedent('''
+          
+          // A4-DIAG: raw usb:ds state monitor.
+          static const char* A4UsbStateName(UsbState state)
+          {
+              switch (state) {
+                  case UsbState_Detached:   return "Detached";
+                  case UsbState_Attached:   return "Attached";
+                  case UsbState_Powered:    return "Powered";
+                  case UsbState_Default:    return "Default";
+                  case UsbState_Address:    return "Address";
+                  case UsbState_Configured: return "Configured";
+                  case UsbState_Suspended:  return "Suspended";
+                  default:                  return "Unknown";
+              }
+          }
+          ''')
           if marker not in s:
               raise SystemExit('g_running marker missing')
           s = s.replace(marker, marker + helper, 1)
-
-          old = '''    // Main thread just sleeps - all work is done in streaming threads\n    while (g_running) {\n        svcSleepThread(1E+9);  // 1 second\n    }\n'''
-          new = r'''    // A4-DIAG: poll usb:ds state from the main thread even while the video
-    // thread is blocked in UvcDeviceWaitReady(). This lets us see exactly how
-    // far the iPad gets during enumeration before AVFoundation is involved.
-    LOG("A4-DIAG raw USB state monitor active (5ms poll, 1s heartbeat)\n");
-    UsbState a4LastState = (UsbState)0xFF;
-    bool a4HaveState = false;
-    bool a4HadGetStateError = false;
-    u32 a4Heartbeat = 0;
-    u32 a4Sequence = 0;
-
-    while (g_running) {
-        UsbState state = UsbState_Detached;
-        Result stateRc = usbDsGetState(&state);
-
-        if (R_FAILED(stateRc)) {
-            if (!a4HadGetStateError) {
-                LOG("A4 USB get-state ERROR rc=0x%x\n", stateRc);
-                a4HadGetStateError = true;
-            }
-        } else {
-            a4HadGetStateError = false;
-            if (!a4HaveState || state != a4LastState) {
-                UsbDeviceSpeed speed = UsbDeviceSpeed_None;
-                Result speedRc = usbDsGetSpeed(&speed);
-                LOG("A4 USB state #%u: %u (%s), speed=%u, speedRc=0x%x\n",
-                    a4Sequence++, (unsigned)state, A4UsbStateName(state),
-                    (unsigned)speed, speedRc);
-                a4LastState = state;
-                a4HaveState = true;
-            }
-
-            // Heartbeat proves the monitor is alive even when the state never
-            // changes. At 5ms per loop, 200 loops is about one second.
-            if (++a4Heartbeat >= 200) {
-                LOG("A4 heartbeat: state=%u (%s)\n",
-                    (unsigned)state, A4UsbStateName(state));
-                a4Heartbeat = 0;
-            }
-        }
-
-        svcSleepThread(5E+6);  // 5ms
-    }
-'''
+          old = '    // Main thread just sleeps - all work is done in streaming threads\n    while (g_running) {\n        svcSleepThread(1E+9);  // 1 second\n    }\n'
+          new = textwrap.dedent('''
+              // A4-DIAG: poll usb:ds state from main even while VideoStreamThread
+              // is blocked in UvcDeviceWaitReady().
+              LOG("A4-DIAG raw USB state monitor active (5ms poll, 1s heartbeat)\\n");
+              UsbState a4LastState = (UsbState)0xFF;
+              bool a4HaveState = false;
+              bool a4HadGetStateError = false;
+              u32 a4Heartbeat = 0;
+              u32 a4Sequence = 0;
+          
+              while (g_running) {
+                  UsbState state = UsbState_Detached;
+                  Result stateRc = usbDsGetState(&state);
+                  if (R_FAILED(stateRc)) {
+                      if (!a4HadGetStateError) {
+                          LOG("A4 USB get-state ERROR rc=0x%x\\n", stateRc);
+                          a4HadGetStateError = true;
+                      }
+                  } else {
+                      a4HadGetStateError = false;
+                      if (!a4HaveState || state != a4LastState) {
+                          UsbDeviceSpeed speed = UsbDeviceSpeed_None;
+                          Result speedRc = usbDsGetSpeed(&speed);
+                          LOG("A4 USB state #%u: %u (%s), speed=%u, speedRc=0x%x\\n",
+                              a4Sequence++, (unsigned)state, A4UsbStateName(state),
+                              (unsigned)speed, speedRc);
+                          a4LastState = state;
+                          a4HaveState = true;
+                      }
+                      if (++a4Heartbeat >= 200) {
+                          LOG("A4 heartbeat: state=%u (%s)\\n",
+                              (unsigned)state, A4UsbStateName(state));
+                          a4Heartbeat = 0;
+                      }
+                  }
+                  svcSleepThread(5E+6);
+              }
+          ''')
           if old not in s:
               raise SystemExit('main sleep loop marker missing')
           s = s.replace(old, new, 1)
@@ -140,46 +126,43 @@ static const char* A4UsbStateName(UsbState state)
           assert 'usbDsGetState(&state)' in s
           PY
 
-      - name: Patch FileLogging mutex for reliable multi-thread logs
+      - name: Patch FileLogging mutex
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import textwrap
           p = Path('/work/a4/source/core.c')
           s = p.read_text()
-
           old = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\n'
-          new = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\nstatic Mutex g_fileLogMutex = 0;  // A4-DIAG: serialize logging across threads\n'
+          new = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\nstatic Mutex g_fileLogMutex = 0;\n'
           if old not in s:
               raise SystemExit('FILE_LOGGING globals marker missing')
           s = s.replace(old, new, 1)
-
           start = s.index('void LogFunctionImpl(const char* fmt, ...)\n{', s.index('#elif FILE_LOGGING'))
           end = s.index('\n}\n#endif', start) + 2
-          replacement = r'''void LogFunctionImpl(const char* fmt, ...)
-{
-    if (!g_sdMounted) return;
-
-    mutexLock(&g_fileLogMutex);
-
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    int len = vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    if (len > 0) {
-        FsFile file;
-        if (R_SUCCEEDED(fsFsOpenFile(&g_sdCard, "/logfile.txt", FsOpenMode_Write | FsOpenMode_Append, &file))) {
-            s64 offset = 0;
-            fsFileGetSize(&file, &offset);
-            fsFileWrite(&file, offset, buf, len, FsWriteOption_Flush);
-            fsFileClose(&file);
-        }
-    }
-
-    mutexUnlock(&g_fileLogMutex);
-}'''
+          replacement = textwrap.dedent('''
+          void LogFunctionImpl(const char* fmt, ...)
+          {
+              if (!g_sdMounted) return;
+              mutexLock(&g_fileLogMutex);
+              char buf[512];
+              va_list args;
+              va_start(args, fmt);
+              int len = vsnprintf(buf, sizeof(buf), fmt, args);
+              va_end(args);
+              if (len > 0) {
+                  FsFile file;
+                  if (R_SUCCEEDED(fsFsOpenFile(&g_sdCard, "/logfile.txt", FsOpenMode_Write | FsOpenMode_Append, &file))) {
+                      s64 offset = 0;
+                      fsFileGetSize(&file, &offset);
+                      fsFileWrite(&file, offset, buf, len, FsWriteOption_Flush);
+                      fsFileClose(&file);
+                  }
+              }
+              mutexUnlock(&g_fileLogMutex);
+          }
+          ''').strip()
           s = s[:start] + replacement + s[end:]
           p.write_text(s)
           assert 'g_fileLogMutex' in s
