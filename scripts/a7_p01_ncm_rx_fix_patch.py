@@ -30,8 +30,7 @@ if '#define NCM_NTB_MAX_SIZE    16384u' not in s:
     raise SystemExit('NTB size anchor missing')
 s = s.replace('#define NCM_NTB_MAX_SIZE    16384u', '#define NCM_NTB_MAX_SIZE    4096u', 1)
 
-# Insert a duplicate HS bulk pair immediately under alt0. The original bulk pair
-# remains after alt1 and is therefore still standards-visible to the host.
+# Duplicate a HS bulk pair under alt0. The original pair remains under alt1.
 old = '''    rc = _append(g_ctx.dataInterface, UsbDeviceSpeed_High, "HS data-alt0", &g_dataInterfaceDesc0, sizeof(g_dataInterfaceDesc0), &cum);
     if (R_FAILED(rc)) return rc;
     rc = _append(g_ctx.dataInterface, UsbDeviceSpeed_High, "HS data-alt1", &g_dataInterfaceDesc1, sizeof(g_dataInterfaceDesc1), &cum);
@@ -73,9 +72,9 @@ if old not in s:
     raise SystemExit('SS alt0 insertion anchor missing')
 s = s.replace(old, new, 1)
 
-# Replace _postOut by function boundaries instead of a fragile full-text anchor.
+# Replace only _postOut. Preserve _be16/_logNcmRx helpers that follow it.
 start = s.find('static void _postOut(void)')
-end = s.find('static void _pollOut(void)', start)
+end = s.find('static u16 _be16', start)
 if start < 0 or end < 0:
     raise SystemExit('_postOut function boundaries missing')
 new_post = r'''static void _postOut(void)
