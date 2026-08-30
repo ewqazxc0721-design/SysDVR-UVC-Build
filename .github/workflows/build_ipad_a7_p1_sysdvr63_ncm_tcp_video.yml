@@ -41,6 +41,7 @@ jobs:
       - name: Apply A7 P1 dual-compatible patch
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
 
       - name: Verify source architecture
         run: |
@@ -51,6 +52,7 @@ jobs:
           grep -n 'A7-P1 TCP SYN' source/ncm/ncm_device.c
           grep -n 'SysDVR protocol 03 video handshake accepted' source/ncm/ncm_device.c
           grep -n 'NcmDeviceSendVideoPacket' source/ncm/ncm_device.c source/ncm/NCMmode.c
+          grep -n 'Handshake failed with code %d.*res.Result.Code' source/modes/proto.c
           # Stock modes must still be present in the exact same build.
           grep -n 'const StreamMode TCP_MODE' source/modes/TCPmode.c
           grep -n 'const StreamMode USB_MODE' source/modes/USBmode.c
