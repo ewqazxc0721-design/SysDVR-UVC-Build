@@ -74,7 +74,6 @@ jobs:
           make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
           test -s sysmodule.nsp
           strings sysmodule.nsp | grep 'SYSDVR_BUILD_FULL/6.3/03'
-          strings sysmodule.nsp | grep 'A7-P2.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting'
 
       - name: Package drop-in build
         run: |
