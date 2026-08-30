@@ -1,0 +1,95 @@
+name: Build A7 P1 SysDVR 6.3 + USB NCM TCP Video
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3 binutils
+
+      - name: Clone official SysDVR 6.3
+        run: |
+          git clone https://github.com/exelix11/SysDVR.git /work/sysdvr
+          cd /work/sysdvr
+          git checkout v6.3
+          git rev-parse HEAD
+
+      - name: Build validated NCM reference source
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/ncmref
+          cd /work/ncmref
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
+          grep -n 'DHCP-ACK' source/usbnet/ncm_device.c
+          grep -n 'ARP reply: 192.168.55.1' source/usbnet/ncm_device.c
+
+      - name: Apply A7 P1 dual-compatible patch
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+
+      - name: Verify source architecture
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          grep -n 'NcmEntrypoint' source/sysmodule/main.c source/ncm/NCMmode.c
+          grep -n 'FileExists("/config/sysdvr/ncm")' source/sysmodule/main.c
+          grep -n 'A7-P1 TCP SYN' source/ncm/ncm_device.c
+          grep -n 'SysDVR protocol 03 video handshake accepted' source/ncm/ncm_device.c
+          grep -n 'NcmDeviceSendVideoPacket' source/ncm/ncm_device.c source/ncm/NCMmode.c
+          # Stock modes must still be present in the exact same build.
+          grep -n 'const StreamMode TCP_MODE' source/modes/TCPmode.c
+          grep -n 'const StreamMode USB_MODE' source/modes/USBmode.c
+          grep -n 'const StreamMode RTSP_MODE' source/modes/RTSPmode.c
+
+      - name: Build full SysDVR 6.3 A7 P1 with FileLogging
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
+          test -s sysmodule.nsp
+          strings sysmodule.nsp | grep 'SYSDVR_BUILD_FULL/6.3/03'
+
+      - name: Package drop-in build
+        run: |
+          set -e
+          OUT=/out/a7p1
+          CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
+          mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr"
+          cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
+          cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
+          printf '.\n' > "$CONTENT/flags/boot2.flag"
+          # Opt into NCM for this test package. Remove this flag to restore the
+          # original SysDVR 6.3 mode-selection behavior.
+          printf '.\n' > "$OUT/config/sysdvr/ncm"
+          cd "$OUT"
+          zip -r /out/SysDVR-A7P1_SysDVR63_USB_NCM_TCP_VIDEO_FileLogging.zip atmosphere config
+
+      - name: Verify package
+        run: |
+          set -e
+          unzip -l /out/SysDVR-A7P1_SysDVR63_USB_NCM_TCP_VIDEO_FileLogging.zip
+          test "$(unzip -Z1 /out/SysDVR-A7P1_SysDVR63_USB_NCM_TCP_VIDEO_FileLogging.zip | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
+          test "$(unzip -Z1 /out/SysDVR-A7P1_SysDVR63_USB_NCM_TCP_VIDEO_FileLogging.zip | grep -c '^config/sysdvr/ncm$')" = 1
+
+      - name: Upload A7 P1
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-A7P1-SysDVR63-USB-NCM-TCP-VIDEO-FileLogging
+          path: /out/SysDVR-A7P1_SysDVR63_USB_NCM_TCP_VIDEO_FileLogging.zip
+          if-no-files-found: error
