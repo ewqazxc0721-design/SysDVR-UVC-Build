@@ -2,9 +2,10 @@ from pathlib import Path
 import sys
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else '/work/a62')
+
+# Instrument native-H264 VS descriptor appends.
 p = root / 'source/uvc/uvc_device.c'
 s = p.read_text()
-
 start_marker = '    // Append VS descriptors (single alt 0: interface → VS class-specific → bulk EP)\n'
 end_marker = '    // Register the video endpoint on VS\n'
 start = s.index(start_marker)
@@ -54,14 +55,17 @@ block = r'''    // Append VS descriptors (single alt 0: interface → VS class-s
 #undef A62_APPEND
 
 '''
-
 s = s[:start] + block + s[end:]
+s = s.replace('A6.1 VS sizes', 'A6.2 VS sizes')
+p.write_text(s)
 
-# Rename the main diagnostic banner produced by A6.1 so logs are unambiguous.
+# Rename A6.1 state-monitor strings in main.c so runtime logs are unambiguous.
+p = root / 'source/sysmodule/main.c'
+s = p.read_text()
 s = s.replace('A6.1-NATIVE-H264-SPLIT-DIAG', 'A6.2-NATIVE-H264-CUMULATIVE-DIAG')
 s = s.replace('A6.1 USB state', 'A6.2 USB state')
 s = s.replace('A6.1 heartbeat', 'A6.2 heartbeat')
-s = s.replace('A6.1 VS sizes', 'A6.2 VS sizes')
-
+s = s.replace('A6.1 USB get-state ERROR', 'A6.2 USB get-state ERROR')
 p.write_text(s)
+
 print('A6.2 instrumentation applied')
