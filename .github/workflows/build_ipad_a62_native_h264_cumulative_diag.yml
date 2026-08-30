@@ -2,6 +2,8 @@ name: Build SysDVR-UVC iPad A6.2 Native H264 Cumulative DIAG
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
