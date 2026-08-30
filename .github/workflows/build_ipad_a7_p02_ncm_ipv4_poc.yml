@@ -1,0 +1,79 @@
+name: Build SysDVR-UVC iPad A7 P0.2 USB NCM IPv4 POC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone exact upstream baseline
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a7p02
+          cd /work/a7p02
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply A7 P0 base NCM patch
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/a7p02
+
+      - name: Apply A7 P0.1 RX activation fix
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/a7p02
+
+      - name: Apply A7 P0.2 IPv4 POC
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/a7p02
+
+      - name: Verify A7 P0.2 source
+        run: |
+          set -e
+          cd /work/a7p02
+          grep -n 'A7-P0.2 USB NCM initialized' source/usbnet/ncm_device.c
+          grep -n 'DHCP-OFFER' source/usbnet/ncm_device.c
+          grep -n 'DHCP-ACK' source/usbnet/ncm_device.c
+          grep -n 'ARP reply: 192.168.55.1' source/usbnet/ncm_device.c
+          grep -n 'ICMP echo request -> reply' source/usbnet/ncm_device.c
+          grep -n 'g_dataInBuffer' source/usbnet/ncm_device.c
+          grep -n 'A7-P0.2 SysDVR USB-NCM IPv4 POC diagnostic' source/sysmodule/main.c
+
+      - name: Build A7 P0.2 FileLogging
+        run: |
+          set -e
+          cd /work/a7p02
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a7p02/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a7p02
+          zip -r /out/SysDVR-UVC-iPad-A7P02_USB_NCM_IPV4_POC_FileLogging.zip atmosphere
+
+      - name: Verify package
+        run: |
+          set -e
+          ls -lh /out/SysDVR-UVC-iPad-A7P02_USB_NCM_IPV4_POC_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A7P02_USB_NCM_IPV4_POC_FileLogging.zip
+
+      - name: Upload A7 P0.2
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A7P02-USB-NCM-IPV4-POC-FileLogging
+          path: /out/SysDVR-UVC-iPad-A7P02_USB_NCM_IPV4_POC_FileLogging.zip
+          if-no-files-found: error
