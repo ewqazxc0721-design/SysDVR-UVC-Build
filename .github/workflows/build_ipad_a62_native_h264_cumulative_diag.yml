@@ -1,0 +1,68 @@
+name: Build SysDVR-UVC iPad A6.2 Native H264 Cumulative DIAG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone exact upstream baseline
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a62
+          cd /work/a62
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply A6.1 native H264 split patch
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a61_patch.py" /work/a62
+
+      - name: Apply A6.2 cumulative diagnostics
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a62_instrument.py" /work/a62
+
+      - name: Verify A6.2 instrumentation
+        run: |
+          set -e
+          cd /work/a62
+          grep -n 'A6.2 append' source/uvc/uvc_device.c
+          grep -n 'cumulative=129' source/uvc/uvc_device.c
+          grep -n 'A6.2-NATIVE-H264-CUMULATIVE-DIAG' source/sysmodule/main.c
+
+      - name: Build A6.2 FileLogging
+        run: |
+          set -e
+          cd /work/a62
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a62/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a62
+          zip -r /out/SysDVR-UVC-iPad-A62_NATIVE_H264_CUMULATIVE_DIAG_FileLogging.zip atmosphere
+
+      - name: Verify package
+        run: |
+          ls -lh /out/SysDVR-UVC-iPad-A62_NATIVE_H264_CUMULATIVE_DIAG_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A62_NATIVE_H264_CUMULATIVE_DIAG_FileLogging.zip
+
+      - name: Upload A6.2
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A62-NATIVE-H264-CUMULATIVE-DIAG-FileLogging
+          path: /out/SysDVR-UVC-iPad-A62_NATIVE_H264_CUMULATIVE_DIAG_FileLogging.zip
+          if-no-files-found: error
