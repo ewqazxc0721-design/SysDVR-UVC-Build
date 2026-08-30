@@ -35,77 +35,78 @@ jobs:
           end = s.index('// Bulk endpoint for video streaming\n', start)
 
           replacement = '''// Video Streaming Class-Specific Descriptors
-// A6: native UVC 1.5 H.264 format/frame descriptors. All device-level USB,
-// BOS, SuperSpeed, interface topology and bulk endpoint behavior remain A5/upstream.
-static struct __attribute__((packed)) {
-    UvcVsInputHeaderDescriptor inputHeader;
-    UvcFormatH264Descriptor h264Format;
-    UvcFrameH264Descriptor h264Frame;
-    UvcColorMatchingDescriptor colorMatching;
-} g_vsDescriptors = {
-    .inputHeader = {
-        .bLength = sizeof(UvcVsInputHeaderDescriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_INPUT_HEADER,
-        .bNumFormats = 1,
-        .wTotalLength = sizeof(g_vsDescriptors),
-        .bEndpointAddress = USB_ENDPOINT_IN | 1,
-        .bmInfo = 0,
-        .bTerminalLink = UVC_ENTITY_OUTPUT_TERMINAL,
-        .bStillCaptureMethod = 0,
-        .bTriggerSupport = 0,
-        .bTriggerUsage = 0,
-        .bControlSize = 1,
-        .bmaControls1 = 0,
-    },
-    .h264Format = {
-        .bLength = sizeof(UvcFormatH264Descriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_FORMAT_H264,
-        .bFormatIndex = 1,
-        .bNumFrameDescriptors = 1,
-        .bDefaultFrameIndex = 1,
-        .bMaxCodecConfigDelay = 1,
-        .bmSupportedSliceModes = 0,
-        .bmSupportedSyncFrameTypes = 0x03,
-        .bResolutionScaling = 0,
-        .Reserved1 = 0,
-        .bmSupportedRateControlModes = 0x01,
-        .wMaxMBperSecOneResolutionNoScalability = 108,
-    },
-    .h264Frame = {
-        .bLength = sizeof(UvcFrameH264Descriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_FRAME_H264,
-        .bFrameIndex = 1,
-        .wWidth = UVC_VIDEO_WIDTH,
-        .wHeight = UVC_VIDEO_HEIGHT,
-        .wSARwidth = 1,
-        .wSARheight = 1,
-        .wProfile = 0x640C,
-        .bLevelIDC = 0x20,
-        .wConstrainedToolset = 0,
-        .bmSupportedUsages = 0x00010003,
-        .bmCapabilities = 0x002A,
-        .bmSVCCapabilities = 0,
-        .bmMVCCapabilities = 0,
-        .dwMinBitRate = UVC_MIN_BITRATE,
-        .dwMaxBitRate = UVC_MAX_BITRATE,
-        .dwDefaultFrameInterval = UVC_FRAME_INTERVAL_30FPS,
-        .bNumFrameIntervals = 1,
-        .dwFrameInterval1 = UVC_FRAME_INTERVAL_30FPS,
-    },
-    .colorMatching = {
-        .bLength = sizeof(UvcColorMatchingDescriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_COLORFORMAT,
-        .bColorPrimaries = 1,
-        .bTransferCharacteristics = 1,
-        .bMatrixCoefficients = 4,
-    },
-};
+          // A6: native UVC 1.5 H.264 format/frame descriptors. All device-level USB,
+          // BOS, SuperSpeed, interface topology and bulk endpoint behavior remain A5/upstream.
+          static struct __attribute__((packed)) {
+              UvcVsInputHeaderDescriptor inputHeader;
+              UvcFormatH264Descriptor h264Format;
+              UvcFrameH264Descriptor h264Frame;
+              UvcColorMatchingDescriptor colorMatching;
+          } g_vsDescriptors = {
+              .inputHeader = {
+                  .bLength = sizeof(UvcVsInputHeaderDescriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_INPUT_HEADER,
+                  .bNumFormats = 1,
+                  .wTotalLength = sizeof(g_vsDescriptors),
+                  .bEndpointAddress = USB_ENDPOINT_IN | 1,
+                  .bmInfo = 0,
+                  .bTerminalLink = UVC_ENTITY_OUTPUT_TERMINAL,
+                  .bStillCaptureMethod = 0,
+                  .bTriggerSupport = 0,
+                  .bTriggerUsage = 0,
+                  .bControlSize = 1,
+                  .bmaControls1 = 0,
+              },
+              .h264Format = {
+                  .bLength = sizeof(UvcFormatH264Descriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_FORMAT_H264,
+                  .bFormatIndex = 1,
+                  .bNumFrameDescriptors = 1,
+                  .bDefaultFrameIndex = 1,
+                  .bMaxCodecConfigDelay = 1,
+                  .bmSupportedSliceModes = 0,
+                  .bmSupportedSyncFrameTypes = 0x03,
+                  .bResolutionScaling = 0,
+                  .Reserved1 = 0,
+                  .bmSupportedRateControlModes = 0x01,
+                  .wMaxMBperSecOneResolutionNoScalability = 108,
+              },
+              .h264Frame = {
+                  .bLength = sizeof(UvcFrameH264Descriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_FRAME_H264,
+                  .bFrameIndex = 1,
+                  .wWidth = UVC_VIDEO_WIDTH,
+                  .wHeight = UVC_VIDEO_HEIGHT,
+                  .wSARwidth = 1,
+                  .wSARheight = 1,
+                  .wProfile = 0x640C,
+                  .bLevelIDC = 0x20,
+                  .wConstrainedToolset = 0,
+                  .bmSupportedUsages = 0x00010003,
+                  .bmCapabilities = 0x002A,
+                  .bmSVCCapabilities = 0,
+                  .bmMVCCapabilities = 0,
+                  .dwMinBitRate = UVC_MIN_BITRATE,
+                  .dwMaxBitRate = UVC_MAX_BITRATE,
+                  .dwDefaultFrameInterval = UVC_FRAME_INTERVAL_30FPS,
+                  .bNumFrameIntervals = 1,
+                  .dwFrameInterval1 = UVC_FRAME_INTERVAL_30FPS,
+              },
+              .colorMatching = {
+                  .bLength = sizeof(UvcColorMatchingDescriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_COLORFORMAT,
+                  .bColorPrimaries = 1,
+                  .bTransferCharacteristics = 1,
+                  .bMatrixCoefficients = 4,
+              },
+          };
 
-'''
+          '''
+          replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines()) + '\n'
           s = s[:start] + replacement + s[end:]
 
           old = "    ctrl->bPreferedVersion = 1;\n    ctrl->bMinVersion = 1;\n    ctrl->bMaxVersion = 1;\n"
