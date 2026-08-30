@@ -1,0 +1,111 @@
+name: Build SysDVR-UVC-Capture
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Install required tools
+        run: |
+          apt-get update
+          apt-get install -y git zip
+
+      - name: Clone upstream
+        run: |
+          git clone --depth 1 https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/SysDVR-UVC-Capture
+          cd /work/SysDVR-UVC-Capture
+          git rev-parse HEAD > /work/upstream_commit.txt
+          echo "=== Repository tree ==="
+          find . -maxdepth 2 -type f | sort | head -200
+
+      - name: Detect build directory
+        id: detect
+        shell: bash
+        run: |
+          set -e
+          ROOT=/work/SysDVR-UVC-Capture
+
+          if [ -f "$ROOT/sysmodule-uvc/Makefile" ]; then
+            BUILD_DIR="$ROOT/sysmodule-uvc"
+          elif [ -f "$ROOT/Makefile" ]; then
+            BUILD_DIR="$ROOT"
+          else
+            echo "ERROR: No Makefile found in repo root or sysmodule-uvc/"
+            find "$ROOT" -maxdepth 3 -name Makefile -print
+            exit 1
+          fi
+
+          echo "BUILD_DIR=$BUILD_DIR"
+          echo "build_dir=$BUILD_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Build Release
+        shell: bash
+        run: |
+          set -e
+          cd "${{ steps.detect.outputs.build_dir }}"
+          make clean || true
+          make -j"$(nproc)"
+          test -s exefs.nsp
+
+          OUT=/out/release/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+
+          cd /out/release
+          zip -r /out/SysDVR-UVC-Capture_Release.zip atmosphere
+
+      - name: Build FileLogging
+        shell: bash
+        run: |
+          set -e
+          cd "${{ steps.detect.outputs.build_dir }}"
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+
+          OUT=/out/filelogging/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+
+          cd /out/filelogging
+          zip -r /out/SysDVR-UVC-Capture_FileLogging.zip atmosphere
+
+      - name: Verify packages
+        shell: bash
+        run: |
+          set -e
+          echo "Upstream commit: $(cat /work/upstream_commit.txt)"
+          unzip -l /out/SysDVR-UVC-Capture_Release.zip
+          unzip -l /out/SysDVR-UVC-Capture_FileLogging.zip
+          test -s /out/release/atmosphere/contents/00FF0000A53BB666/exefs.nsp
+          test -s /out/filelogging/atmosphere/contents/00FF0000A53BB666/exefs.nsp
+          ls -lh \
+            /out/release/atmosphere/contents/00FF0000A53BB666/exefs.nsp \
+            /out/filelogging/atmosphere/contents/00FF0000A53BB666/exefs.nsp \
+            /out/SysDVR-UVC-Capture_Release.zip \
+            /out/SysDVR-UVC-Capture_FileLogging.zip
+
+      - name: Upload Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-Capture-Release
+          path: /out/SysDVR-UVC-Capture_Release.zip
+          if-no-files-found: error
+
+      - name: Upload FileLogging
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-Capture-FileLogging
+          path: /out/SysDVR-UVC-Capture_FileLogging.zip
+          if-no-files-found: error
