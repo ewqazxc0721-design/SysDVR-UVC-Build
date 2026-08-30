@@ -1,0 +1,181 @@
+name: Build SysDVR-UVC iPad A3
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Install required tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone known-good upstream commit
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/base
+          cd /work/base
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+          cp -a /work/base /work/a3v1
+          cp -a /work/base /work/a3v2
+
+      - name: Patch A3-V1 - USB2 only, keep UVC 1.5
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a3v1/source/uvc/uvc_device.c')
+          s = p.read_text()
+
+          start = s.index('    // Super Speed (USB 3.0)\n')
+          end = s.index('    return 0;\n', start)
+          block = s[start:end]
+          bos_start = block.index('    // Super Speed (USB 3.0)\n')
+          block = '    // A3-V1: USB2-only for iPad compatibility. No SS device descriptor or BOS.\n'
+          s = s[:start] + block + s[end:]
+
+          ss_vc = '''    // Super Speed VC\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcInterfaceDesc, USB_DT_INTERFACE_SIZE));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcDescriptors, sizeof(g_vcDescriptors)));\n\n'''
+          if ss_vc not in s:
+              raise SystemExit('A3-V1 SuperSpeed VC block not found')
+          s = s.replace(ss_vc, '    // A3-V1: SuperSpeed VC descriptors disabled.\n\n', 1)
+
+          ss_vs_start = s.index('    // Super Speed VS\n')
+          ss_vs_end = s.index('    // Register the video endpoint on VS\n', ss_vs_start)
+          s = s[:ss_vs_start] + '    // A3-V1: SuperSpeed VS descriptors disabled.\n\n' + s[ss_vs_end:]
+
+          p.write_text(s)
+          assert 'A3-V1: USB2-only' in s
+          assert 'usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super' not in s
+          assert 'usbDsSetBinaryObjectStore' not in s
+          PY
+          cd /work/a3v1
+          git diff -- source/uvc/uvc_device.c
+
+      - name: Patch A3-V2 - USB2 only + UVC 1.1/protocol 0
+        shell: bash
+        run: |
+          cp /work/a3v1/source/uvc/uvc_device.c /work/a3v2/source/uvc/uvc_device.c
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a3v2/source/uvc/uvc_device.c')
+          s = p.read_text()
+          if '.bcdUVC = 0x0150' not in s:
+              raise SystemExit('UVC 1.5 marker missing')
+          s = s.replace('.bcdUVC = 0x0150,  // UVC 1.5', '.bcdUVC = 0x0110,  // A3-V2: UVC 1.1', 1)
+          if '.bInterfaceProtocol = UVC_PC_PROTOCOL_15,' not in s:
+              raise SystemExit('VC protocol 1.5 marker missing')
+          s = s.replace('.bInterfaceProtocol = UVC_PC_PROTOCOL_15,', '.bInterfaceProtocol = UVC_PC_PROTOCOL_UNDEFINED, // A3-V2 protocol 0', 1)
+          p.write_text(s)
+          assert '.bcdUVC = 0x0110' in s
+          assert 'A3-V2 protocol 0' in s
+          PY
+          cd /work/a3v2
+          git diff -- source/uvc/uvc_device.c
+
+      - name: Descriptor summary
+        run: |
+          echo '=== A3-V1 ==='
+          grep -nE 'bDeviceClass|bDeviceSubClass|bDeviceProtocol|bcdUVC|bInterfaceProtocol|A3-V1' /work/a3v1/source/uvc/uvc_device.c | head -80
+          echo '=== A3-V2 ==='
+          grep -nE 'bDeviceClass|bDeviceSubClass|bDeviceProtocol|bcdUVC|bInterfaceProtocol|A3-V2' /work/a3v2/source/uvc/uvc_device.c | head -80
+
+      - name: Build A3-V1 Release
+        run: |
+          set -e
+          cd /work/a3v1
+          make clean || true
+          make -j"$(nproc)"
+          test -s exefs.nsp
+          OUT=/out/a3v1/release/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a3v1/release
+          zip -r /out/SysDVR-UVC-iPad-A3V1_Release.zip atmosphere
+
+      - name: Build A3-V1 FileLogging
+        run: |
+          set -e
+          cd /work/a3v1
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a3v1/log/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a3v1/log
+          zip -r /out/SysDVR-UVC-iPad-A3V1_FileLogging.zip atmosphere
+
+      - name: Build A3-V2 Release
+        run: |
+          set -e
+          cd /work/a3v2
+          make clean || true
+          make -j"$(nproc)"
+          test -s exefs.nsp
+          OUT=/out/a3v2/release/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a3v2/release
+          zip -r /out/SysDVR-UVC-iPad-A3V2_Release.zip atmosphere
+
+      - name: Build A3-V2 FileLogging
+        run: |
+          set -e
+          cd /work/a3v2
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a3v2/log/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a3v2/log
+          zip -r /out/SysDVR-UVC-iPad-A3V2_FileLogging.zip atmosphere
+
+      - name: Verify outputs
+        run: |
+          set -e
+          ls -lh /out/*.zip
+          unzip -l /out/SysDVR-UVC-iPad-A3V1_Release.zip
+          unzip -l /out/SysDVR-UVC-iPad-A3V2_Release.zip
+
+      - name: Upload A3-V1 Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A3V1-Release
+          path: /out/SysDVR-UVC-iPad-A3V1_Release.zip
+          if-no-files-found: error
+
+      - name: Upload A3-V1 FileLogging
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A3V1-FileLogging
+          path: /out/SysDVR-UVC-iPad-A3V1_FileLogging.zip
+          if-no-files-found: error
+
+      - name: Upload A3-V2 Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A3V2-Release
+          path: /out/SysDVR-UVC-iPad-A3V2_Release.zip
+          if-no-files-found: error
+
+      - name: Upload A3-V2 FileLogging
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A3V2-FileLogging
+          path: /out/SysDVR-UVC-iPad-A3V2_FileLogging.zip
+          if-no-files-found: error
