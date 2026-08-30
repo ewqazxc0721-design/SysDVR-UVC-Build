@@ -1,0 +1,194 @@
+name: Build SysDVR-UVC iPad A2
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a2.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Install required tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone known-good upstream commit
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/upstream
+          cd /work/upstream
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+          git rev-parse HEAD
+          cp -a /work/upstream /work/a2v1
+          cp -a /work/upstream /work/a2v2
+
+      - name: Patch A2-V1 - device class 00/00/00, keep IAD
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a2v1/source/uvc/uvc_device.c')
+          s = p.read_text()
+          old = '''        .bDeviceClass = USB_CLASS_MISC,      // Multi-interface device\n        .bDeviceSubClass = 0x02,              // Common Class\n        .bDeviceProtocol = 0x01,              // Interface Association\n'''
+          new = '''        .bDeviceClass = 0x00,                // A2-V1: class defined per interface\n        .bDeviceSubClass = 0x00,\n        .bDeviceProtocol = 0x00,\n'''
+          if old not in s:
+              raise SystemExit('A2-V1 device descriptor anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          assert '.bDeviceClass = 0x00' in s
+          assert 'UsbDeviceSpeed_High, &g_iadDescriptor' in s
+          assert 'UsbDeviceSpeed_Super, &g_iadDescriptor' in s
+          print('A2-V1 patch OK: device class 00/00/00; IAD retained')
+          PY
+          cd /work/a2v1
+          git diff -- source/uvc/uvc_device.c
+
+      - name: Patch A2-V2 - device class 00/00/00, remove IAD append
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a2v2/source/uvc/uvc_device.c')
+          s = p.read_text()
+          old = '''        .bDeviceClass = USB_CLASS_MISC,      // Multi-interface device\n        .bDeviceSubClass = 0x02,              // Common Class\n        .bDeviceProtocol = 0x01,              // Interface Association\n'''
+          new = '''        .bDeviceClass = 0x00,                // A2-V2: class defined per interface\n        .bDeviceSubClass = 0x00,\n        .bDeviceProtocol = 0x00,\n'''
+          if old not in s:
+              raise SystemExit('A2-V2 device descriptor anchor not found')
+          s = s.replace(old, new, 1)
+
+          hs = '''    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_High, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n'''
+          ss = '''    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n'''
+          if hs not in s or ss not in s:
+              raise SystemExit('A2-V2 IAD append anchors not found')
+          s = s.replace(hs, '', 1).replace(ss, '', 1)
+          p.write_text(s)
+          assert '.bDeviceClass = 0x00' in s
+          assert 'UsbDeviceSpeed_High, &g_iadDescriptor' not in s
+          assert 'UsbDeviceSpeed_Super, &g_iadDescriptor' not in s
+          print('A2-V2 patch OK: device class 00/00/00; IAD append removed')
+          PY
+          cd /work/a2v2
+          git diff -- source/uvc/uvc_device.c
+
+      - name: Descriptor summary
+        shell: bash
+        run: |
+          echo '=== A2-V1 ==='
+          grep -A18 'struct usb_device_descriptor deviceDesc' /work/a2v1/source/uvc/uvc_device.c | head -20
+          echo 'IAD append count:'
+          grep -c 'UsbDeviceSpeed_.*&g_iadDescriptor' /work/a2v1/source/uvc/uvc_device.c || true
+          echo 'VC interface:'
+          grep -A12 'g_vcInterfaceDesc' /work/a2v1/source/uvc/uvc_device.c | head -13
+          echo 'VS interface:'
+          grep -A12 'g_vsInterfaceDesc0' /work/a2v1/source/uvc/uvc_device.c | head -13
+          echo '=== A2-V2 ==='
+          grep -A18 'struct usb_device_descriptor deviceDesc' /work/a2v2/source/uvc/uvc_device.c | head -20
+          echo 'IAD append count:'
+          grep -c 'UsbDeviceSpeed_.*&g_iadDescriptor' /work/a2v2/source/uvc/uvc_device.c || true
+
+      - name: Build A2-V1 Release
+        shell: bash
+        run: |
+          set -e
+          cd /work/a2v1
+          make clean || true
+          make -j"$(nproc)"
+          test -s exefs.nsp
+          OUT=/out/a2v1_release/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+          cd /out/a2v1_release
+          zip -r /out/SysDVR-UVC-iPad-A2V1_Release.zip atmosphere
+
+      - name: Build A2-V1 FileLogging
+        shell: bash
+        run: |
+          set -e
+          cd /work/a2v1
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a2v1_log/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+          cd /out/a2v1_log
+          zip -r /out/SysDVR-UVC-iPad-A2V1_FileLogging.zip atmosphere
+
+      - name: Build A2-V2 Release
+        shell: bash
+        run: |
+          set -e
+          cd /work/a2v2
+          make clean || true
+          make -j"$(nproc)"
+          test -s exefs.nsp
+          OUT=/out/a2v2_release/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+          cd /out/a2v2_release
+          zip -r /out/SysDVR-UVC-iPad-A2V2_Release.zip atmosphere
+
+      - name: Build A2-V2 FileLogging
+        shell: bash
+        run: |
+          set -e
+          cd /work/a2v2
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a2v2_log/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          [ -f toolbox.json ] && cp toolbox.json "$OUT/" || true
+          [ -d flags ] && cp -R flags "$OUT/" || true
+          cd /out/a2v2_log
+          zip -r /out/SysDVR-UVC-iPad-A2V2_FileLogging.zip atmosphere
+
+      - name: Verify outputs
+        run: |
+          set -e
+          ls -lh /out/*.zip
+          for f in /out/*.zip; do
+            echo "=== $f ==="
+            unzip -l "$f"
+          done
+
+      - name: Upload A2-V1 Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A2V1-Release
+          path: /out/SysDVR-UVC-iPad-A2V1_Release.zip
+          if-no-files-found: error
+
+      - name: Upload A2-V1 FileLogging
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A2V1-FileLogging
+          path: /out/SysDVR-UVC-iPad-A2V1_FileLogging.zip
+          if-no-files-found: error
+
+      - name: Upload A2-V2 Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A2V2-Release
+          path: /out/SysDVR-UVC-iPad-A2V2_Release.zip
+          if-no-files-found: error
+
+      - name: Upload A2-V2 FileLogging
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A2V2-FileLogging
+          path: /out/SysDVR-UVC-iPad-A2V2_FileLogging.zip
+          if-no-files-found: error
