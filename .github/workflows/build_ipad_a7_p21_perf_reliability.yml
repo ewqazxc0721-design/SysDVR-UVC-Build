@@ -79,7 +79,8 @@ jobs:
           make clean || true
           make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
           test -s sysmodule.nsp
-          strings sysmodule.nsp | grep 'SYSDVR_BUILD_FULL/6.3/03'
+          test -s sysmodule.elf
+          strings sysmodule.elf | grep 'SYSDVR_BUILD_FULL/6.3/03'
           strings sysmodule.elf | grep 'A7-P2.1.1 raw SD logfile initialized BUILD=P211'
           strings sysmodule.elf | grep 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211 NTB=16384 DATAGRAMS=8'
           if strings sysmodule.elf | grep -q 'A7-P1 NCM OUT armed'; then
