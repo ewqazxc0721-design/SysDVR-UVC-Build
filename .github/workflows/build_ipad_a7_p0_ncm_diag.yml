@@ -1,0 +1,71 @@
+name: Build SysDVR-UVC iPad A7 P0 USB NCM DIAG
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone exact upstream baseline
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a7p0
+          cd /work/a7p0
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply A7 P0 USB NCM diagnostic patch
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/a7p0
+
+      - name: Verify A7 P0 source
+        run: |
+          set -e
+          cd /work/a7p0
+          grep -n 'source/usbnet' Makefile
+          grep -n 'A7-P0 USB NCM initialized' source/usbnet/ncm_device.c
+          grep -n 'CDC_SUBCLASS_NCM' source/usbnet/ncm_device.c
+          grep -n 'NCM_GET_NTB_PARAMETERS' source/usbnet/ncm_device.c
+          grep -n 'HS data-alt1' source/usbnet/ncm_device.c
+          grep -n 'A7-P0 SysDVR USB-NCM binding diagnostic' source/sysmodule/main.c
+          grep -n 'A7-P0 no capture' source/core.c
+
+      - name: Build A7 P0 FileLogging
+        run: |
+          set -e
+          cd /work/a7p0
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a7p0/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a7p0
+          zip -r /out/SysDVR-UVC-iPad-A7P0_USB_NCM_BIND_DIAG_FileLogging.zip atmosphere
+
+      - name: Verify package
+        run: |
+          set -e
+          ls -lh /out/SysDVR-UVC-iPad-A7P0_USB_NCM_BIND_DIAG_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A7P0_USB_NCM_BIND_DIAG_FileLogging.zip
+
+      - name: Upload A7 P0
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A7P0-USB-NCM-BIND-DIAG-FileLogging
+          path: /out/SysDVR-UVC-iPad-A7P0_USB_NCM_BIND_DIAG_FileLogging.zip
+          if-no-files-found: error
