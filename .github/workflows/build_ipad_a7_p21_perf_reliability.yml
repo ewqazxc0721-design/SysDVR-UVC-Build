@@ -58,9 +58,8 @@ jobs:
           grep -n 'A7P21_AGG_MAX_FRAMES 8u' source/ncm/ncm_device.c
           grep -n '_a7p21FlushAggUnlocked' source/ncm/ncm_device.c
           grep -n '_a7p21FlushQueuedTx' source/ncm/ncm_device.c
-          grep -n 'A7-P2.1.1 NCM ready: NTB=16384 datagrams=8;' source/ncm/ncm_device.c
           grep -n 'A7-P2.1.1 raw SD logfile initialized BUILD=P211' source/core.c
-          grep -n 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211' source/ncm/NCMmode.c
+          grep -n 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211 NTB=16384 DATAGRAMS=8' source/ncm/NCMmode.c
           if grep -q 'LOG("A7-P1 NCM OUT armed' source/ncm/ncm_device.c; then
             echo 'hot-path NCM OUT armed log still present'
             exit 1
@@ -82,8 +81,7 @@ jobs:
           test -s sysmodule.nsp
           strings sysmodule.nsp | grep 'SYSDVR_BUILD_FULL/6.3/03'
           strings sysmodule.elf | grep 'A7-P2.1.1 raw SD logfile initialized BUILD=P211'
-          strings sysmodule.elf | grep 'A7-P2.1.1 NCM ready: NTB=16384 datagrams=8;'
-          strings sysmodule.elf | grep 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211'
+          strings sysmodule.elf | grep 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211 NTB=16384 DATAGRAMS=8'
           if strings sysmodule.elf | grep -q 'A7-P1 NCM OUT armed'; then
             echo 'compiled binary still contains hot-path NCM OUT armed marker'
             exit 1
