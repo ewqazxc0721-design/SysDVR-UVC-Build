@@ -1,0 +1,112 @@
+name: Build A7 P2.1.2 SysDVR USB NCM Control Flush
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a7_p212_control_flush.yml'
+      - 'scripts/a7_p212_control_flush_patch.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3 binutils
+
+      - name: Clone official SysDVR 6.3
+        run: |
+          git clone https://github.com/exelix11/SysDVR.git /work/sysdvr
+          cd /work/sysdvr
+          git checkout v6.3
+          git rev-parse HEAD
+
+      - name: Build validated NCM reference source
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/ncmref
+          cd /work/ncmref
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
+
+      - name: Apply A7 P1 through P2.1.2 patches
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p21_perf_reliability_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p211_runtime_marker_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p212_control_flush_patch.py" /work/sysdvr/sysmodule
+
+      - name: Verify A7 P2.1.2 architecture
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          grep -n 'NCM_NTB_MAX_SIZE    16384u' source/ncm/ncm_device.c
+          grep -n 'NCM_MAX_DATAGRAMS   8u' source/ncm/ncm_device.c
+          grep -n '_sendNcmEthernetFrameQuietFlushed' source/ncm/ncm_device.c
+          test "$(grep -c 'R_FAILED(rc) || !_a7p21FlushQueuedTx()' source/ncm/ncm_device.c)" = 2
+          test "$(grep -c 'if (payloadLen == 0)' source/ncm/ncm_device.c)" = 2
+          grep -n 'A7-P2.1.2 raw SD logfile initialized BUILD=P212' source/core.c
+          grep -n 'A7-P2.1.2 SysDVR 6.3 + USB-NCM control-flush A/V mode starting BUILD=P212 NTB=16384 DATAGRAMS=8' source/ncm/NCMmode.c
+          grep -n 'A7-P2.1.2 NCM ready BUILD=P212: DHCP' source/ncm/NCMmode.c
+          if grep -q 'LOG("A7-P1 NCM OUT armed' source/ncm/ncm_device.c; then
+            echo 'hot-path NCM OUT armed log still present'
+            exit 1
+          fi
+
+      - name: Build A7 P2.1.2 with FileLogging
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
+          test -s sysmodule.nsp
+          test -s sysmodule.elf
+          strings sysmodule.elf | grep 'SYSDVR_BUILD_FULL/6.3/03'
+          strings sysmodule.elf | grep 'A7-P2.1.2 raw SD logfile initialized BUILD=P212'
+          strings sysmodule.elf | grep 'A7-P2.1.2 SysDVR 6.3 + USB-NCM control-flush A/V mode starting BUILD=P212 NTB=16384 DATAGRAMS=8'
+          strings sysmodule.elf | grep 'A7-P2.1.2 NCM ready BUILD=P212: DHCP'
+
+      - name: Package drop-in build
+        run: |
+          set -e
+          OUT=/out/a7p212
+          CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
+          mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr"
+          cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
+          cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
+          printf '.\n' > "$CONTENT/flags/boot2.flag"
+          printf '.\n' > "$OUT/config/sysdvr/ncm"
+          printf 'BUILD=P212\nNTB=16384\nDATAGRAMS=8\nCONTROL_FLUSH=1\n' > "$OUT/config/sysdvr/build_a7p212.txt"
+          cd "$OUT"
+          zip -r /out/SysDVR-A7P212_SysDVR63_USB_NCM_CONTROL_FLUSH.zip atmosphere config
+
+      - name: Verify package
+        run: |
+          set -e
+          ZIP=/out/SysDVR-A7P212_SysDVR63_USB_NCM_CONTROL_FLUSH.zip
+          unzip -t "$ZIP"
+          test "$(unzip -Z1 "$ZIP" | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^config/sysdvr/ncm$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^config/sysdvr/build_a7p212.txt$')" = 1
+          unzip -p "$ZIP" config/sysdvr/build_a7p212.txt | grep '^CONTROL_FLUSH=1$'
+          sha256sum "$ZIP"
+
+      - name: Upload A7 P2.1.2
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-A7P212-SysDVR63-USB-NCM-CONTROL-FLUSH
+          path: /out/SysDVR-A7P212_SysDVR63_USB_NCM_CONTROL_FLUSH.zip
+          if-no-files-found: error
