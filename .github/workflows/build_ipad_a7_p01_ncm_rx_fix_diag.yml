@@ -1,0 +1,75 @@
+name: Build SysDVR-UVC iPad A7 P0.1 USB NCM RX Fix DIAG
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone exact upstream baseline
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a7p01
+          cd /work/a7p01
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply A7 P0 base NCM patch
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/a7p01
+
+      - name: Apply A7 P0.1 RX activation fix
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/a7p01
+
+      - name: Verify A7 P0.1 source
+        run: |
+          set -e
+          cd /work/a7p01
+          grep -n 'A7-P0.1 USB NCM initialized' source/usbnet/ncm_device.c
+          grep -n 'bNumEndpoints = 2' source/usbnet/ncm_device.c
+          grep -n 'HS alt0-data-out' source/usbnet/ncm_device.c
+          grep -n 'SS alt0-data-out' source/usbnet/ncm_device.c
+          grep -n 'usbDsWaitReady before NCM OUT' source/usbnet/ncm_device.c
+          grep -n 'NCM_NTB_MAX_SIZE    4096u' source/usbnet/ncm_device.c
+          grep -n 'A7-P0.1 SysDVR USB-NCM RX-fix diagnostic' source/sysmodule/main.c
+
+      - name: Build A7 P0.1 FileLogging
+        run: |
+          set -e
+          cd /work/a7p01
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a7p01/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a7p01
+          zip -r /out/SysDVR-UVC-iPad-A7P01_USB_NCM_RX_FIX_DIAG_FileLogging.zip atmosphere
+
+      - name: Verify package
+        run: |
+          set -e
+          ls -lh /out/SysDVR-UVC-iPad-A7P01_USB_NCM_RX_FIX_DIAG_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A7P01_USB_NCM_RX_FIX_DIAG_FileLogging.zip
+
+      - name: Upload A7 P0.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A7P01-USB-NCM-RX-FIX-DIAG-FileLogging
+          path: /out/SysDVR-UVC-iPad-A7P01_USB_NCM_RX_FIX_DIAG_FileLogging.zip
+          if-no-files-found: error
