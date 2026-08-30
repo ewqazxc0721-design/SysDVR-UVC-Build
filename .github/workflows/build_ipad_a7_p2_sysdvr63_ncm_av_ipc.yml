@@ -41,6 +41,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
           python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
           python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
 
       - name: Verify A7 P2 architecture
         run: |
