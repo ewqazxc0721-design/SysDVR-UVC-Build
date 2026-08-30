@@ -1,9 +1,13 @@
-name: Build A7 P2.1 SysDVR USB NCM Performance Reliability
+name: Build A7 P2.1.1 SysDVR USB NCM Performance Reliability
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a7_p21_perf_reliability.yml'
+      - 'scripts/a7_p21_perf_reliability_patch.py'
+      - 'scripts/a7_p211_runtime_marker_patch.py'
 
 jobs:
   build:
@@ -36,15 +40,16 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
           python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
 
-      - name: Apply A7 P1 P2 and P2.1 patches
+      - name: Apply A7 P1 P2 P2.1 and P2.1.1 patches
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
           python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
           python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
           python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
           python3 "$GITHUB_WORKSPACE/scripts/a7_p21_perf_reliability_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p211_runtime_marker_patch.py" /work/sysdvr/sysmodule
 
-      - name: Verify A7 P2.1 architecture
+      - name: Verify A7 P2.1.1 architecture
         run: |
           set -e
           cd /work/sysdvr/sysmodule
@@ -53,7 +58,9 @@ jobs:
           grep -n 'A7P21_AGG_MAX_FRAMES 8u' source/ncm/ncm_device.c
           grep -n '_a7p21FlushAggUnlocked' source/ncm/ncm_device.c
           grep -n '_a7p21FlushQueuedTx' source/ncm/ncm_device.c
-          grep -n 'A7-P2.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting' source/ncm/NCMmode.c
+          grep -n 'A7-P2.1.1 NCM ready: NTB=16384 datagrams=8;' source/ncm/ncm_device.c
+          grep -n 'A7-P2.1.1 raw SD logfile initialized BUILD=P211' source/core.c
+          grep -n 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211' source/ncm/NCMmode.c
           if grep -q 'LOG("A7-P1 NCM OUT armed' source/ncm/ncm_device.c; then
             echo 'hot-path NCM OUT armed log still present'
             exit 1
@@ -66,7 +73,7 @@ jobs:
           grep -n 'const StreamMode USB_MODE' source/modes/USBmode.c
           grep -n 'const StreamMode RTSP_MODE' source/modes/RTSPmode.c
 
-      - name: Build A7 P2.1 with FileLogging
+      - name: Build A7 P2.1.1 with FileLogging
         run: |
           set -e
           cd /work/sysdvr/sysmodule
@@ -74,30 +81,42 @@ jobs:
           make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
           test -s sysmodule.nsp
           strings sysmodule.nsp | grep 'SYSDVR_BUILD_FULL/6.3/03'
+          strings sysmodule.elf | grep 'A7-P2.1.1 raw SD logfile initialized BUILD=P211'
+          strings sysmodule.elf | grep 'A7-P2.1.1 NCM ready: NTB=16384 datagrams=8;'
+          strings sysmodule.elf | grep 'A7-P2.1.1 SysDVR 6.3 + USB-NCM aggregated A/V mode starting BUILD=P211'
+          if strings sysmodule.elf | grep -q 'A7-P1 NCM OUT armed'; then
+            echo 'compiled binary still contains hot-path NCM OUT armed marker'
+            exit 1
+          fi
 
       - name: Package drop-in build
         run: |
           set -e
-          OUT=/out/a7p21
+          OUT=/out/a7p211
           CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
           mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr"
           cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
           cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
           printf '.\n' > "$CONTENT/flags/boot2.flag"
           printf '.\n' > "$OUT/config/sysdvr/ncm"
+          printf 'BUILD=P211\nNTB=16384\nDATAGRAMS=8\n' > "$OUT/config/sysdvr/build_a7p211.txt"
           cd "$OUT"
-          zip -r /out/SysDVR-A7P21_SysDVR63_USB_NCM_PERF_RELIABILITY_FileLogging.zip atmosphere config
+          zip -r /out/SysDVR-A7P211_SysDVR63_USB_NCM_PERF_RELIABILITY_DEPLOY_VERIFY.zip atmosphere config
 
       - name: Verify package
         run: |
           set -e
-          unzip -l /out/SysDVR-A7P21_SysDVR63_USB_NCM_PERF_RELIABILITY_FileLogging.zip
-          test "$(unzip -Z1 /out/SysDVR-A7P21_SysDVR63_USB_NCM_PERF_RELIABILITY_FileLogging.zip | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
-          test "$(unzip -Z1 /out/SysDVR-A7P21_SysDVR63_USB_NCM_PERF_RELIABILITY_FileLogging.zip | grep -c '^config/sysdvr/ncm$')" = 1
+          ZIP=/out/SysDVR-A7P211_SysDVR63_USB_NCM_PERF_RELIABILITY_DEPLOY_VERIFY.zip
+          unzip -l "$ZIP"
+          test "$(unzip -Z1 "$ZIP" | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^config/sysdvr/ncm$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^config/sysdvr/build_a7p211.txt$')" = 1
+          unzip -p "$ZIP" config/sysdvr/build_a7p211.txt | grep '^BUILD=P211$'
+          sha256sum "$ZIP"
 
-      - name: Upload A7 P2.1
+      - name: Upload A7 P2.1.1
         uses: actions/upload-artifact@v4
         with:
-          name: SysDVR-A7P21-SysDVR63-USB-NCM-PERF-RELIABILITY-FileLogging
-          path: /out/SysDVR-A7P21_SysDVR63_USB_NCM_PERF_RELIABILITY_FileLogging.zip
+          name: SysDVR-A7P211-SysDVR63-USB-NCM-PERF-RELIABILITY-DEPLOY-VERIFY
+          path: /out/SysDVR-A7P211_SysDVR63_USB_NCM_PERF_RELIABILITY_DEPLOY_VERIFY.zip
           if-no-files-found: error
