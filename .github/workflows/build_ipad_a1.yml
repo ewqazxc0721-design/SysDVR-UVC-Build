@@ -10,149 +10,109 @@ jobs:
       image: devkitpro/devkita64:latest
 
     steps:
-      - name: Install required tools
+      - name: Install tools
         run: |
           apt-get update
           apt-get install -y git zip python3
 
-      - name: Clone known-good upstream commit
+      - name: Clone upstream
         run: |
           git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/SysDVR-UVC-Capture
           cd /work/SysDVR-UVC-Capture
           git checkout d7212ca0942e2782c65c6002d85364687d73c9df
-          git rev-parse HEAD
 
-      - name: Patch UVC descriptors for iPad A1
+      - name: Apply iPad A1 descriptor patch
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('/work/SysDVR-UVC-Capture/source/uvc/uvc_device.c')
           s = p.read_text()
+          start = s.index('// Video Streaming Class-Specific Descriptors\n')
+          end = s.index('// Bulk endpoint for video streaming\n', start)
+          replacement = '''// Video Streaming Class-Specific Descriptors
+          // iPad A1: native UVC 1.5 H.264 descriptors instead of frame-based + H264 GUID.
+          static struct __attribute__((packed)) {
+              UvcVsInputHeaderDescriptor inputHeader;
+              UvcFormatH264Descriptor h264Format;
+              UvcFrameH264Descriptor h264Frame;
+              UvcColorMatchingDescriptor colorMatching;
+          } g_vsDescriptors = {
+              .inputHeader = {
+                  .bLength = sizeof(UvcVsInputHeaderDescriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_INPUT_HEADER,
+                  .bNumFormats = 1,
+                  .wTotalLength = sizeof(g_vsDescriptors),
+                  .bEndpointAddress = USB_ENDPOINT_IN | 1,
+                  .bmInfo = 0,
+                  .bTerminalLink = UVC_ENTITY_OUTPUT_TERMINAL,
+                  .bStillCaptureMethod = 0,
+                  .bTriggerSupport = 0,
+                  .bTriggerUsage = 0,
+                  .bControlSize = 1,
+                  .bmaControls1 = 0,
+              },
+              .h264Format = {
+                  .bLength = sizeof(UvcFormatH264Descriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_FORMAT_H264,
+                  .bFormatIndex = 1,
+                  .bNumFrameDescriptors = 1,
+                  .bDefaultFrameIndex = 1,
+                  .bMaxCodecConfigDelay = 1,
+                  .bmSupportedSliceModes = 0,
+                  .bmSupportedSyncFrameTypes = 3,
+                  .bResolutionScaling = 0,
+                  .Reserved1 = 0,
+                  .bmSupportedRateControlModes = 1,
+                  .wMaxMBperSecOneResolutionNoScalability = 108,
+              },
+              .h264Frame = {
+                  .bLength = sizeof(UvcFrameH264Descriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_FRAME_H264,
+                  .bFrameIndex = 1,
+                  .wWidth = UVC_VIDEO_WIDTH,
+                  .wHeight = UVC_VIDEO_HEIGHT,
+                  .wSARwidth = 1,
+                  .wSARheight = 1,
+                  .wProfile = 0x640C,
+                  .bLevelIDC = 0x20,
+                  .wConstrainedToolset = 0,
+                  .bmSupportedUsages = 0x00010003,
+                  .bmCapabilities = 0x002A,
+                  .bmSVCCapabilities = 0,
+                  .bmMVCCapabilities = 0,
+                  .dwMinBitRate = UVC_MIN_BITRATE,
+                  .dwMaxBitRate = UVC_MAX_BITRATE,
+                  .dwDefaultFrameInterval = UVC_FRAME_INTERVAL_30FPS,
+                  .bNumFrameIntervals = 1,
+                  .dwFrameInterval1 = UVC_FRAME_INTERVAL_30FPS,
+              },
+              .colorMatching = {
+                  .bLength = sizeof(UvcColorMatchingDescriptor),
+                  .bDescriptorType = UVC_CS_INTERFACE,
+                  .bDescriptorSubType = UVC_VS_COLORFORMAT,
+                  .bColorPrimaries = 1,
+                  .bTransferCharacteristics = 1,
+                  .bMatrixCoefficients = 4,
+              },
+          };
 
-          start_marker = '// Video Streaming Class-Specific Descriptors\n'
-          end_marker = '// Bulk endpoint for video streaming\n'
-          start = s.index(start_marker)
-          end = s.index(end_marker, start)
-
-          replacement = r'''// Video Streaming Class-Specific Descriptors
-// iPad A1 compatibility build:
-// Advertise native UVC 1.5 H.264 payload descriptors instead of generic
-// VS_FORMAT_FRAME_BASED + H264 GUID. Bitstream and transport stay unchanged.
-static struct __attribute__((packed)) {
-    UvcVsInputHeaderDescriptor inputHeader;
-    UvcFormatH264Descriptor h264Format;
-    UvcFrameH264Descriptor h264Frame;
-    UvcColorMatchingDescriptor colorMatching;
-} g_vsDescriptors = {
-    .inputHeader = {
-        .bLength = sizeof(UvcVsInputHeaderDescriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_INPUT_HEADER,
-        .bNumFormats = 1,
-        .wTotalLength = sizeof(g_vsDescriptors),
-        .bEndpointAddress = USB_ENDPOINT_IN | 1,
-        .bmInfo = 0,
-        .bTerminalLink = UVC_ENTITY_OUTPUT_TERMINAL,
-        .bStillCaptureMethod = 0,
-        .bTriggerSupport = 0,
-        .bTriggerUsage = 0,
-        .bControlSize = 1,
-        .bmaControls1 = 0,
-    },
-    .h264Format = {
-        .bLength = sizeof(UvcFormatH264Descriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_FORMAT_H264,
-        .bFormatIndex = 1,
-        .bNumFrameDescriptors = 1,
-        .bDefaultFrameIndex = 1,
-        .bMaxCodecConfigDelay = 1,
-        .bmSupportedSliceModes = 0x00,
-        .bmSupportedSyncFrameTypes = 0x03,
-        .bResolutionScaling = 0x00,
-        .Reserved1 = 0,
-        .bmSupportedRateControlModes = 0x01,
-        .wMaxMBperSecOneResolutionNoScalability = 108,
-        .wMaxMBperSecTwoResolutionsNoScalability = 0,
-        .wMaxMBperSecThreeResolutionsNoScalability = 0,
-        .wMaxMBperSecFourResolutionsNoScalability = 0,
-        .wMaxMBperSecOneResolutionTemporalScalability = 0,
-        .wMaxMBperSecTwoResolutionsTemporalScalability = 0,
-        .wMaxMBperSecThreeResolutionsTemporalScalability = 0,
-        .wMaxMBperSecFourResolutionsTemporalScalability = 0,
-        .wMaxMBperSecOneResolutionTemporalQualityScalability = 0,
-        .wMaxMBperSecTwoResolutionsTemporalQualityScalability = 0,
-        .wMaxMBperSecThreeResolutionsTemporalQualityScalability = 0,
-        .wMaxMBperSecFourResolutionsTemporalQualityScalability = 0,
-        .wMaxMBperSecOneResolutionTemporalSpatialScalability = 0,
-        .wMaxMBperSecTwoResolutionsTemporalSpatialScalability = 0,
-        .wMaxMBperSecThreeResolutionsTemporalSpatialScalability = 0,
-        .wMaxMBperSecFourResolutionsTemporalSpatialScalability = 0,
-        .wMaxMBperSecOneResolutionFullScalability = 0,
-        .wMaxMBperSecTwoResolutionsFullScalability = 0,
-        .wMaxMBperSecThreeResolutionsFullScalability = 0,
-        .wMaxMBperSecFourResolutionsFullScalability = 0,
-    },
-    .h264Frame = {
-        .bLength = sizeof(UvcFrameH264Descriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_FRAME_H264,
-        .bFrameIndex = 1,
-        .wWidth = UVC_VIDEO_WIDTH,
-        .wHeight = UVC_VIDEO_HEIGHT,
-        .wSARwidth = 1,
-        .wSARheight = 1,
-        // Injected SPS starts 67 64 0C 20: Constrained High, Level 3.2.
-        .wProfile = 0x640C,
-        .bLevelIDC = 0x20,
-        .wConstrainedToolset = 0,
-        // Real-time modes 0/1 plus mandatory file-storage I/P usage bit.
-        .bmSupportedUsages = 0x00010003,
-        // CABAC, separate luma/chroma QP, no picture reordering.
-        .bmCapabilities = 0x002A,
-        .bmSVCCapabilities = 0,
-        .bmMVCCapabilities = 0,
-        .dwMinBitRate = UVC_MIN_BITRATE,
-        .dwMaxBitRate = UVC_MAX_BITRATE,
-        .dwDefaultFrameInterval = UVC_FRAME_INTERVAL_30FPS,
-        .bNumFrameIntervals = 1,
-        .dwFrameInterval1 = UVC_FRAME_INTERVAL_30FPS,
-    },
-    .colorMatching = {
-        .bLength = sizeof(UvcColorMatchingDescriptor),
-        .bDescriptorType = UVC_CS_INTERFACE,
-        .bDescriptorSubType = UVC_VS_COLORFORMAT,
-        .bColorPrimaries = 1,
-        .bTransferCharacteristics = 1,
-        .bMatrixCoefficients = 4,
-    },
-};
-
-'''
-
+          '''
+          # Remove Python-block indentation before writing C.
+          replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in replacement.splitlines()) + '\n'
           s = s[:start] + replacement + s[end:]
-
-          # Populate H.264-specific UVC 1.5 Probe/Commit fields. These values
-          # describe the existing Nintendo stream; they do not reconfigure it.
-          old = '''    ctrl->bPreferedVersion = 1;\n    ctrl->bMinVersion = 1;\n    ctrl->bMaxVersion = 1;\n'''
-          new = '''    ctrl->bPreferedVersion = 1;\n    ctrl->bMinVersion = 1;\n    ctrl->bMaxVersion = 1;\n    ctrl->bUsage = 0x01;                  // UC Config mode 0\n    ctrl->bBitDepthLuma = 8;\n    ctrl->bmSettings = 0x2A;              // CABAC + separate QP + no reordering\n    ctrl->bMaxNumberOfRefFramesPlus1 = 2;\n    ctrl->bmRateControlModes = 0x0001;     // VBR low-delay\n    ctrl->bmLayoutPerStream = 0;           // non-simulcast H.264\n'''
+          old = "    ctrl->bPreferedVersion = 1;\n    ctrl->bMinVersion = 1;\n    ctrl->bMaxVersion = 1;\n"
+          new = old + "    ctrl->bUsage = 0x01;\n    ctrl->bBitDepthLuma = 8;\n    ctrl->bmSettings = 0x2A;\n    ctrl->bMaxNumberOfRefFramesPlus1 = 2;\n    ctrl->bmRateControlModes = 0x0001;\n    ctrl->bmLayoutPerStream = 0;\n"
           if old not in s:
-              raise SystemExit('Probe/Commit patch anchor not found')
+              raise SystemExit('probe/commit anchor missing')
           s = s.replace(old, new, 1)
-
           p.write_text(s)
-
-          assert 'UVC_VS_FORMAT_H264' in s
-          assert 'UVC_VS_FRAME_H264' in s
-          assert '.wProfile = 0x640C' in s
-          assert 'ctrl->bBitDepthLuma = 8' in s
-          print('iPad A1 descriptor patch applied')
+          if 'UVC_VS_FORMAT_H264' not in s or 'UVC_VS_FRAME_H264' not in s:
+              raise SystemExit('A1 descriptor patch failed')
           PY
-
-          cd /work/SysDVR-UVC-Capture
-          git diff -- source/uvc/uvc_device.c
 
       - name: Build A1 Release
         shell: bash
@@ -162,13 +122,11 @@ static struct __attribute__((packed)) {
           make clean || true
           make -j"$(nproc)"
           test -s exefs.nsp
-
           OUT=/out/release/atmosphere/contents/00FF0000A53BB666
           mkdir -p "$OUT"
           cp exefs.nsp "$OUT/exefs.nsp"
           cp toolbox.json "$OUT/toolbox.json"
           cp -R flags "$OUT/flags"
-
           cd /out/release
           zip -r /out/SysDVR-UVC-iPad-A1_Release.zip atmosphere
 
@@ -180,25 +138,13 @@ static struct __attribute__((packed)) {
           make clean || true
           make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
           test -s exefs.nsp
-
           OUT=/out/filelogging/atmosphere/contents/00FF0000A53BB666
           mkdir -p "$OUT"
           cp exefs.nsp "$OUT/exefs.nsp"
           cp toolbox.json "$OUT/toolbox.json"
           cp -R flags "$OUT/flags"
-
           cd /out/filelogging
           zip -r /out/SysDVR-UVC-iPad-A1_FileLogging.zip atmosphere
-
-      - name: Verify A1 packages
-        shell: bash
-        run: |
-          set -e
-          unzip -l /out/SysDVR-UVC-iPad-A1_Release.zip
-          unzip -l /out/SysDVR-UVC-iPad-A1_FileLogging.zip
-          test -s /out/release/atmosphere/contents/00FF0000A53BB666/exefs.nsp
-          test -s /out/filelogging/atmosphere/contents/00FF0000A53BB666/exefs.nsp
-          ls -lh /out/*.zip /out/*/atmosphere/contents/00FF0000A53BB666/exefs.nsp
 
       - name: Upload A1 Release
         uses: actions/upload-artifact@v4
