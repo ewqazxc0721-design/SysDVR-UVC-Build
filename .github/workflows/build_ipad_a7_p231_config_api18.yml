@@ -1,0 +1,115 @@
+name: Build A7 P2.3.1 Config API 18 Compatibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a7_p231_config_api18.yml'
+      - 'scripts/a7_p231_config_api18_compat_patch.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3 binutils
+
+      - name: Clone sources
+        run: |
+          git clone https://github.com/exelix11/SysDVR.git /work/sysdvr
+          git -C /work/sysdvr checkout v6.3
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/ncmref
+          git -C /work/ncmref checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply patches through P2.3.1
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p21_perf_reliability_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p211_runtime_marker_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p212_control_flush_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p22_tcp_retransmit_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p221_burst_retransmit_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p23_ipad_usb_mode_patch.py" /work/sysdvr
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p231_config_api18_compat_patch.py" /work/sysdvr
+
+      - name: Verify compatibility and separate buttons
+        run: |
+          set -e
+          cd /work/sysdvr
+          grep -n '#define SYSDVR_IPC_VERSION 18' sysmodule/source/modes/defines.h
+          if grep -q '#define SYSDVR_IPC_VERSION 19' sysmodule/source/modes/defines.h; then
+            echo 'incompatible Config API v19 remains'
+            exit 1
+          fi
+          grep -n '#define TYPE_MODE_USB 1' sysmodule/source/modes/defines.h
+          grep -n '#define TYPE_MODE_IPAD_USB 5' sysmodule/source/modes/defines.h
+          grep -n 'SwitchModes(&USB_MODE)' sysmodule/source/core.c
+          grep -n 'SwitchModes(&NCM_MODE)' sysmodule/source/core.c
+          grep -n 'ModeUsbTitle' SysDVRConfig/source/Scenes/SceneMain.cpp
+          grep -n 'ModeIpadUsbTitle' SysDVRConfig/source/Scenes/SceneMain.cpp
+          grep -n 'A7-P2.3.1 iPad USB mode starting BUILD=P231' sysmodule/source/ncm/NCMmode.c
+
+      - name: Build sysmodule and settings app
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
+          test -s sysmodule.nsp
+          test -s sysmodule.elf
+          strings sysmodule.elf | grep 'A7-P2.3.1 raw SD logfile initialized BUILD=P231'
+          strings sysmodule.elf | grep 'A7-P2.3.1 iPad USB mode starting BUILD=P231'
+          strings sysmodule.elf | grep 'A7-P2.2.1 audio RTO burst'
+          strings sysmodule.elf | grep 'A7-P2.2.1 video RTO burst'
+          cd /work/sysdvr/SysDVRConfig
+          make clean || true
+          make -j"$(nproc)"
+          test -s SysDVR-conf.nro
+          strings SysDVR-conf.nro | grep 'iPad USB'
+
+      - name: Package
+        run: |
+          set -e
+          OUT=/out/a7p231
+          CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
+          mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr" "$OUT/switch"
+          cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
+          cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
+          cp /work/sysdvr/SysDVRConfig/SysDVR-conf.nro "$OUT/switch/SysDVR-conf.nro"
+          printf '.\n' > "$CONTENT/flags/boot2.flag"
+          printf '.\n' > "$OUT/config/sysdvr/ipad_usb"
+          printf 'BUILD=P231\nCONFIG_API=18\nMODE_BUTTON=IPAD_USB\nMODE_ID=5\nORIGINAL_USB_PRESERVED=1\nNTB=16384\nDATAGRAMS=8\nCONTROL_FLUSH=1\nRETX_RING=32\nRTO_LOOPS=25\nRETX_BURST=8\nMAX_RETRIES=8\n' > "$OUT/config/sysdvr/build_a7p231.txt"
+          cd "$OUT"
+          zip -r /out/SysDVR-A7P231_CONFIG_API18_SEPARATE_IPAD_USB.zip atmosphere config switch
+
+      - name: Verify package
+        run: |
+          set -e
+          ZIP=/out/SysDVR-A7P231_CONFIG_API18_SEPARATE_IPAD_USB.zip
+          unzip -t "$ZIP"
+          unzip -l "$ZIP" | grep 'switch/SysDVR-conf.nro'
+          unzip -p "$ZIP" config/sysdvr/build_a7p231.txt | grep '^BUILD=P231$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p231.txt | grep '^CONFIG_API=18$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p231.txt | grep '^ORIGINAL_USB_PRESERVED=1$'
+          sha256sum "$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-A7P231-Config-API18-Separate-iPad-USB
+          path: /out/SysDVR-A7P231_CONFIG_API18_SEPARATE_IPAD_USB.zip
+          if-no-files-found: error
+
