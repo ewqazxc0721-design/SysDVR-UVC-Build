@@ -39,7 +39,7 @@ jobs:
           set -e
           cd /work/a62
           grep -n 'A6.2 append' source/uvc/uvc_device.c
-          grep -n 'cumulative=129' source/uvc/uvc_device.c
+          grep -n 'HS color' source/uvc/uvc_device.c
           grep -n 'A6.2-NATIVE-H264-CUMULATIVE-DIAG' source/sysmodule/main.c
 
       - name: Build A6.2 FileLogging
