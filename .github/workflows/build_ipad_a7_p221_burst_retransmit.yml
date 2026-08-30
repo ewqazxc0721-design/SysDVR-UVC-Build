@@ -1,0 +1,102 @@
+name: Build A7 P2.2.1 SysDVR USB NCM Burst Retransmit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a7_p221_burst_retransmit.yml'
+      - 'scripts/a7_p221_burst_retransmit_patch.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3 binutils
+
+      - name: Clone sources
+        run: |
+          git clone https://github.com/exelix11/SysDVR.git /work/sysdvr
+          git -C /work/sysdvr checkout v6.3
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/ncmref
+          git -C /work/ncmref checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Apply patches through P2.2.1
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p21_perf_reliability_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p211_runtime_marker_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p212_control_flush_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p22_tcp_retransmit_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p221_burst_retransmit_patch.py" /work/sysdvr/sysmodule
+
+      - name: Verify architecture
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          grep -n 'A7P22_RETX_AFTER_LOOPS 25' source/ncm/ncm_device.c
+          grep -n 'A7P221_RETX_BURST_SEGMENTS 8u' source/ncm/ncm_device.c
+          grep -n '_a7p221VideoRetransmitBurst' source/ncm/ncm_device.c
+          grep -n '_a7p221AudioRetransmitBurst' source/ncm/ncm_device.c
+          grep -n 'A7-P2.2.1 raw SD logfile initialized BUILD=P221' source/core.c
+          grep -n 'A7-P2.2.1 NCM ready BUILD=P221' source/ncm/NCMmode.c
+          if grep -q '_a7p22VideoRetransmitOldest\|_a7p22AudioRetransmitOldest' source/ncm/ncm_device.c; then
+            echo 'single-segment retransmit path remains'
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
+          test -s sysmodule.nsp
+          test -s sysmodule.elf
+          strings sysmodule.elf | grep 'A7-P2.2.1 raw SD logfile initialized BUILD=P221'
+          strings sysmodule.elf | grep 'A7-P2.2.1 audio RTO burst'
+          strings sysmodule.elf | grep 'A7-P2.2.1 video RTO burst'
+
+      - name: Package
+        run: |
+          set -e
+          OUT=/out/a7p221
+          CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
+          mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr"
+          cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
+          cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
+          printf '.\n' > "$CONTENT/flags/boot2.flag"
+          printf '.\n' > "$OUT/config/sysdvr/ncm"
+          printf 'BUILD=P221\nNTB=16384\nDATAGRAMS=8\nCONTROL_FLUSH=1\nRETX_RING=32\nRTO_LOOPS=25\nRETX_BURST=8\nMAX_RETRIES=8\n' > "$OUT/config/sysdvr/build_a7p221.txt"
+          cd "$OUT"
+          zip -r /out/SysDVR-A7P221_SysDVR63_USB_NCM_BURST_RETRANSMIT.zip atmosphere config
+
+      - name: Verify package
+        run: |
+          set -e
+          ZIP=/out/SysDVR-A7P221_SysDVR63_USB_NCM_BURST_RETRANSMIT.zip
+          unzip -t "$ZIP"
+          unzip -p "$ZIP" config/sysdvr/build_a7p221.txt | grep '^BUILD=P221$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p221.txt | grep '^RETX_BURST=8$'
+          sha256sum "$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-A7P221-SysDVR63-USB-NCM-BURST-RETRANSMIT
+          path: /out/SysDVR-A7P221_SysDVR63_USB_NCM_BURST_RETRANSMIT.zip
+          if-no-files-found: error
+
