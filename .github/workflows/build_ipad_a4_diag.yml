@@ -1,0 +1,220 @@
+name: Build SysDVR-UVC iPad A4 DIAG
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Install required tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3
+
+      - name: Clone known-good upstream commit
+        run: |
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/a4
+          cd /work/a4
+          git checkout d7212ca0942e2782c65c6002d85364687d73c9df
+
+      - name: Patch A4 baseline - A3V1 USB2-only
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a4/source/uvc/uvc_device.c')
+          s = p.read_text()
+
+          start = s.index('    // Super Speed (USB 3.0)\n')
+          end = s.index('    return 0;\n', start)
+          s = s[:start] + '    // A4-DIAG: USB2-only baseline. No SS device descriptor or BOS.\n' + s[end:]
+
+          ss_vc = '''    // Super Speed VC\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_iadDescriptor, sizeof(g_iadDescriptor)));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcInterfaceDesc, USB_DT_INTERFACE_SIZE));\n    R_RET_ON_FAIL(usbDsInterface_AppendConfigurationData(g_uvcCtx.controlInterface,\n        UsbDeviceSpeed_Super, &g_vcDescriptors, sizeof(g_vcDescriptors)));\n\n'''
+          if ss_vc not in s:
+              raise SystemExit('A4 SuperSpeed VC block not found')
+          s = s.replace(ss_vc, '    // A4-DIAG: SuperSpeed VC descriptors disabled.\n\n', 1)
+
+          ss_vs_start = s.index('    // Super Speed VS\n')
+          ss_vs_end = s.index('    // Register the video endpoint on VS\n', ss_vs_start)
+          s = s[:ss_vs_start] + '    // A4-DIAG: SuperSpeed VS descriptors disabled.\n\n' + s[ss_vs_end:]
+
+          # Removing SS path leaves this static descriptor unused under -Werror.
+          comp_start = s.index('// Super-speed endpoint companion\n')
+          comp_end = s.index('// ============================================================================\n// UAC (Audio) Descriptor Data', comp_start)
+          s = s[:comp_start] + '// A4-DIAG: SuperSpeed endpoint companion removed with SS path.\n\n' + s[comp_end:]
+
+          p.write_text(s)
+          assert 'A4-DIAG: USB2-only baseline' in s
+          assert 'usbDsSetUsbDeviceDescriptor(UsbDeviceSpeed_Super' not in s
+          assert 'usbDsSetBinaryObjectStore' not in s
+          assert 'g_ssCompanionDesc' not in s
+          PY
+
+      - name: Patch A4 raw USB state monitor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a4/source/sysmodule/main.c')
+          s = p.read_text()
+
+          marker = 'static volatile bool g_running = true;\n'
+          helper = r'''
+
+// A4-DIAG: raw usb:ds state monitor. These are the USB 2.0 device states
+// exposed by libnx: Detached=0, Attached=1, Powered=2, Default=3,
+// Address=4, Configured=5, Suspended=6.
+static const char* A4UsbStateName(UsbState state)
+{
+    switch (state) {
+        case UsbState_Detached:   return "Detached";
+        case UsbState_Attached:   return "Attached";
+        case UsbState_Powered:    return "Powered";
+        case UsbState_Default:    return "Default";
+        case UsbState_Address:    return "Address";
+        case UsbState_Configured: return "Configured";
+        case UsbState_Suspended:  return "Suspended";
+        default:                  return "Unknown";
+    }
+}
+'''
+          if marker not in s:
+              raise SystemExit('g_running marker missing')
+          s = s.replace(marker, marker + helper, 1)
+
+          old = '''    // Main thread just sleeps - all work is done in streaming threads\n    while (g_running) {\n        svcSleepThread(1E+9);  // 1 second\n    }\n'''
+          new = r'''    // A4-DIAG: poll usb:ds state from the main thread even while the video
+    // thread is blocked in UvcDeviceWaitReady(). This lets us see exactly how
+    // far the iPad gets during enumeration before AVFoundation is involved.
+    LOG("A4-DIAG raw USB state monitor active (5ms poll, 1s heartbeat)\n");
+    UsbState a4LastState = (UsbState)0xFF;
+    bool a4HaveState = false;
+    bool a4HadGetStateError = false;
+    u32 a4Heartbeat = 0;
+    u32 a4Sequence = 0;
+
+    while (g_running) {
+        UsbState state = UsbState_Detached;
+        Result stateRc = usbDsGetState(&state);
+
+        if (R_FAILED(stateRc)) {
+            if (!a4HadGetStateError) {
+                LOG("A4 USB get-state ERROR rc=0x%x\n", stateRc);
+                a4HadGetStateError = true;
+            }
+        } else {
+            a4HadGetStateError = false;
+            if (!a4HaveState || state != a4LastState) {
+                UsbDeviceSpeed speed = UsbDeviceSpeed_None;
+                Result speedRc = usbDsGetSpeed(&speed);
+                LOG("A4 USB state #%u: %u (%s), speed=%u, speedRc=0x%x\n",
+                    a4Sequence++, (unsigned)state, A4UsbStateName(state),
+                    (unsigned)speed, speedRc);
+                a4LastState = state;
+                a4HaveState = true;
+            }
+
+            // Heartbeat proves the monitor is alive even when the state never
+            // changes. At 5ms per loop, 200 loops is about one second.
+            if (++a4Heartbeat >= 200) {
+                LOG("A4 heartbeat: state=%u (%s)\n",
+                    (unsigned)state, A4UsbStateName(state));
+                a4Heartbeat = 0;
+            }
+        }
+
+        svcSleepThread(5E+6);  // 5ms
+    }
+'''
+          if old not in s:
+              raise SystemExit('main sleep loop marker missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          assert 'A4-DIAG raw USB state monitor active' in s
+          assert 'usbDsGetState(&state)' in s
+          PY
+
+      - name: Patch FileLogging mutex for reliable multi-thread logs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/work/a4/source/core.c')
+          s = p.read_text()
+
+          old = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\n'
+          new = 'static FsFileSystem g_sdCard;\nstatic bool g_sdMounted = false;\nstatic Mutex g_fileLogMutex = 0;  // A4-DIAG: serialize logging across threads\n'
+          if old not in s:
+              raise SystemExit('FILE_LOGGING globals marker missing')
+          s = s.replace(old, new, 1)
+
+          start = s.index('void LogFunctionImpl(const char* fmt, ...)\n{', s.index('#elif FILE_LOGGING'))
+          end = s.index('\n}\n#endif', start) + 2
+          replacement = r'''void LogFunctionImpl(const char* fmt, ...)
+{
+    if (!g_sdMounted) return;
+
+    mutexLock(&g_fileLogMutex);
+
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    if (len > 0) {
+        FsFile file;
+        if (R_SUCCEEDED(fsFsOpenFile(&g_sdCard, "/logfile.txt", FsOpenMode_Write | FsOpenMode_Append, &file))) {
+            s64 offset = 0;
+            fsFileGetSize(&file, &offset);
+            fsFileWrite(&file, offset, buf, len, FsWriteOption_Flush);
+            fsFileClose(&file);
+        }
+    }
+
+    mutexUnlock(&g_fileLogMutex);
+}'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s)
+          assert 'g_fileLogMutex' in s
+          assert 'mutexLock(&g_fileLogMutex)' in s
+          PY
+
+      - name: Show A4 patch summary
+        run: |
+          cd /work/a4
+          git diff -- source/uvc/uvc_device.c source/sysmodule/main.c source/core.c
+
+      - name: Build A4 DIAG FileLogging
+        run: |
+          set -e
+          cd /work/a4
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING"
+          test -s exefs.nsp
+          OUT=/out/a4/atmosphere/contents/00FF0000A53BB666
+          mkdir -p "$OUT"
+          cp exefs.nsp "$OUT/exefs.nsp"
+          cp toolbox.json "$OUT/toolbox.json"
+          cp -R flags "$OUT/flags"
+          cd /out/a4
+          zip -r /out/SysDVR-UVC-iPad-A4_DIAG_FileLogging.zip atmosphere
+
+      - name: Verify output
+        run: |
+          set -e
+          ls -lh /out/SysDVR-UVC-iPad-A4_DIAG_FileLogging.zip
+          unzip -l /out/SysDVR-UVC-iPad-A4_DIAG_FileLogging.zip
+
+      - name: Upload A4 DIAG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-UVC-iPad-A4-DIAG-FileLogging
+          path: /out/SysDVR-UVC-iPad-A4_DIAG_FileLogging.zip
+          if-no-files-found: error
