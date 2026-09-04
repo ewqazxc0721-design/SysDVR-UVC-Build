@@ -120,3 +120,4 @@ jobs:
           path: /out/SysDVR-A7P232_OVERLAY_IPAD_USB_BUTTON.zip
           if-no-files-found: error
 
+# P232 reproducible overlay build
