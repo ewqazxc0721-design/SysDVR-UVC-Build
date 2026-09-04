@@ -79,8 +79,9 @@ jobs:
           make clean || true
           make -j"$(nproc)"
           test -s sysdvr-overlay.ovl
-          strings sysdvr-overlay.ovl | grep 'iPad USB'
-          strings sysdvr-overlay.ovl | grep 'v1.0.16-P232'
+          test -s sysdvr-overlay.elf
+          strings sysdvr-overlay.elf | grep 'iPad USB'
+          strings sysdvr-overlay.elf | grep 'v1.0.16-P232'
 
       - name: Package complete SD deployment
         run: |
@@ -106,8 +107,7 @@ jobs:
           test "$(unzip -Z1 "$ZIP" | grep -c '^switch/.overlays/SysDVR.ovl$')" = 1
           test "$(unzip -Z1 "$ZIP" | grep -c '^switch/SysDVR/SysDVR.nro$')" = 1
           test "$(unzip -Z1 "$ZIP" | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
-          unzip -p "$ZIP" switch/.overlays/SysDVR.ovl | strings | grep 'iPad USB'
-          unzip -p "$ZIP" switch/.overlays/SysDVR.ovl | strings | grep 'v1.0.16-P232'
+          test "$(unzip -p "$ZIP" switch/.overlays/SysDVR.ovl | sha256sum | cut -d' ' -f1)" = "$(sha256sum /work/sysdvr-overlay/sysdvr-overlay.ovl | cut -d' ' -f1)"
           unzip -p "$ZIP" switch/SysDVR/SysDVR.nro | strings | grep 'iPad USB'
           unzip -p "$ZIP" config/sysdvr/build_a7p232.txt | grep '^BUILD=P232$'
           unzip -p "$ZIP" config/sysdvr/build_a7p232.txt | grep '^CONFIG_API=18$'
