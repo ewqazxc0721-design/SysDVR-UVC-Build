@@ -1,0 +1,136 @@
+name: Build A7 P2.5.2 Discovery and Audio Pump
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_ipad_a7_p252_discovery_audio_pump.yml'
+      - 'scripts/a7_p252_discovery_audio_pump_patch.py'
+      - 'scripts/a7_p252_overlay_ip_patch.py'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y git zip python3 binutils
+
+      - name: Clone pinned sources
+        run: |
+          git clone https://github.com/exelix11/SysDVR.git /work/sysdvr
+          git -C /work/sysdvr checkout v6.3
+          git clone https://github.com/Insektaure/SysDVR-UVC-Capture.git /work/ncmref
+          git -C /work/ncmref checkout d7212ca0942e2782c65c6002d85364687d73c9df
+          git clone https://github.com/Hartie95/sysdvr-overlay.git /work/sysdvr-overlay
+          git -C /work/sysdvr-overlay checkout 8aded84c262cc59b91118c194f53c911100d154d
+          git -C /work/sysdvr-overlay submodule update --init --recursive
+
+      - name: Apply patches through P2.5.2
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p0_ncm_diag_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p01_ncm_rx_fix_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p02_ncm_ipv4_poc_patch.py" /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_ncm_tcp_video_patch.py" /work/sysdvr/sysmodule /work/ncmref
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p1_sysdvr63_filelogging_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_audio_ipc_logging_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p2_compile_fix.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p21_perf_reliability_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p211_runtime_marker_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p212_control_flush_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p22_tcp_retransmit_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p221_burst_retransmit_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p23_ipad_usb_mode_patch.py" /work/sysdvr
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p231_config_api18_compat_patch.py" /work/sysdvr
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p24_ncm_rx_audio_latency_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p25_audio_fast_recovery_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p251_usb_staged_transition_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p252_discovery_audio_pump_patch.py" /work/sysdvr/sysmodule
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p232_overlay_ipad_usb_patch.py" /work/sysdvr-overlay
+          python3 "$GITHUB_WORKSPACE/scripts/a7_p252_overlay_ip_patch.py" /work/sysdvr-overlay
+
+      - name: Verify P2.5.2 source changes
+        run: |
+          set -e
+          grep -n '#define SYSDVR_IPC_VERSION 18' /work/sysdvr/sysmodule/source/modes/defines.h
+          grep -n '#define TYPE_MODE_IPAD_USB 5' /work/sysdvr/sysmodule/source/modes/defines.h
+          grep -n '#define A7P24_AUDIO_RETX_AFTER_LOOPS 40' /work/sysdvr/sysmodule/source/ncm/ncm_device.c
+          grep -n '#define A7P25_AUDIO_RECOVERY_SEGMENTS 3u' /work/sysdvr/sysmodule/source/ncm/ncm_device.c
+          grep -n '#define A7P252_DISCOVERY_PORT 19999u' /work/sysdvr/sysmodule/source/ncm/ncm_device.c
+          grep -n 'g_tcpState != A7Tcp_Closed || g_audioTcpState != A7Tcp_Closed' /work/sysdvr/sysmodule/source/ncm/ncm_device.c
+          grep -n '_a7p252MaybeAdvertise();' /work/sysdvr/sysmodule/source/ncm/ncm_device.c
+          grep -A5 -n 'while (atomic_load(&IsThreadRunning))' /work/sysdvr/sysmodule/source/ncm/NCMmode.c | grep 'NcmDeviceProcessRequests();'
+          grep -n 'A7P251UsbTransitionLocked' /work/sysdvr/sysmodule/source/core.c
+          grep -n '#define IPAD_USB_IP_ADDRESS 0x0137A8C0u' /work/sysdvr-overlay/source/main.cpp
+          grep -n 'newMode == TYPE_MODE_IPAD_USB ? IPAD_USB_IP_ADDRESS : newIp' /work/sysdvr-overlay/source/main.cpp
+          grep -A6 -n 'void refreshIp' /work/sysdvr-overlay/source/main.cpp | grep 'updateIP(IPAD_USB_IP_ADDRESS);'
+
+      - name: Build P2.5.2 and companion interfaces
+        run: |
+          set -e
+          cd /work/sysdvr/sysmodule
+          make clean || true
+          make -j"$(nproc)" DEFINES="-DFILE_LOGGING=1"
+          test -s sysmodule.nsp
+          test -s sysmodule.elf
+          strings sysmodule.elf | grep 'A7-P2.5.2 raw SD logfile initialized BUILD=P252'
+          strings sysmodule.elf | grep 'A7-P2.5.2 iPad USB mode starting BUILD=P252'
+          strings sysmodule.elf | grep 'DISCOVERY=UDP19999 AUDIO_PUMP=1'
+          strings sysmodule.elf | grep 'A7-P2.5.2 UDP discovery sent port=19999'
+          strings sysmodule.elf | grep 'USB transition OFF stage: waiting 1000 ms'
+          cd /work/sysdvr/SysDVRConfig
+          make clean || true
+          make -j"$(nproc)"
+          test -s SysDVR-conf.nro
+          strings SysDVR-conf.nro | grep 'iPad USB'
+          cd /work/sysdvr-overlay
+          make clean || true
+          make -j"$(nproc)"
+          test -s sysdvr-overlay.ovl
+          strings sysdvr-overlay.elf | grep 'iPad USB'
+          strings sysdvr-overlay.elf | grep 'v1.0.17-P252'
+
+      - name: Package complete SD deployment
+        run: |
+          set -e
+          OUT=/out/a7p252
+          CONTENT="$OUT/atmosphere/contents/00FF0000A53BB665"
+          mkdir -p "$CONTENT/flags" "$OUT/config/sysdvr" "$OUT/switch/SysDVR" "$OUT/switch/.overlays"
+          cp /work/sysdvr/sysmodule/sysmodule.nsp "$CONTENT/exefs.nsp"
+          cp /work/sysdvr/sysmodule/toolbox.json "$CONTENT/toolbox.json"
+          cp /work/sysdvr/SysDVRConfig/SysDVR-conf.nro "$OUT/switch/SysDVR/SysDVR.nro"
+          cp /work/sysdvr-overlay/sysdvr-overlay.ovl "$OUT/switch/.overlays/SysDVR.ovl"
+          printf '.\n' > "$CONTENT/flags/boot2.flag"
+          printf 'BUILD=P252\nCONFIG_API=18\nMODE_ID_IPAD_USB=5\nUSB_TRANSITION_OFF_MS=1000\nUSB_TRANSITION_TARGET_LOCK=1\nDEFAULT_MODE_UNCHANGED=1\nAUDIO_REQUEST_PUMP=1\nDISCOVERY_UDP_PORT=19999\nDISCOVERY_INTERVAL_MS=2000\nDISCOVERY_IDLE_ONLY=1\nIPAD_USB_DISPLAY_IP=192.168.55.1\nAUDIO_INFLIGHT_SEGMENTS=6\nAUDIO_RTO_LOOPS=40\nAUDIO_RETX_BURST=3\nVIDEO_INFLIGHT_SEGMENTS=24\nVIDEO_RETX_BURST=8\nOVERLAY_VERSION=1.0.17-P252\nORIGINAL_USB_PRESERVED=1\nNTB=16384\nDATAGRAMS=8\n' > "$OUT/config/sysdvr/build_a7p252.txt"
+          cd "$OUT"
+          zip -r /out/SysDVR-A7P252_DISCOVERY_AUDIO_PUMP.zip atmosphere config switch
+
+      - name: Verify deployment ZIP
+        run: |
+          set -e
+          ZIP=/out/SysDVR-A7P252_DISCOVERY_AUDIO_PUMP.zip
+          unzip -t "$ZIP"
+          test "$(unzip -Z1 "$ZIP" | grep -c '^switch/.overlays/SysDVR.ovl$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^switch/SysDVR/SysDVR.nro$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -c '^atmosphere/contents/00FF0000A53BB665/exefs.nsp$')" = 1
+          test "$(unzip -Z1 "$ZIP" | grep -Ec '^config/sysdvr/(usb|ipad_usb|ncm|tcp|rtsp)$' || true)" = 0
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^BUILD=P252$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^AUDIO_REQUEST_PUMP=1$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^DISCOVERY_UDP_PORT=19999$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^DISCOVERY_IDLE_ONLY=1$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^IPAD_USB_DISPLAY_IP=192.168.55.1$'
+          unzip -p "$ZIP" config/sysdvr/build_a7p252.txt | grep '^ORIGINAL_USB_PRESERVED=1$'
+          sha256sum "$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SysDVR-A7P252-Discovery-Audio-Pump
+          path: /out/SysDVR-A7P252_DISCOVERY_AUDIO_PUMP.zip
+          if-no-files-found: error
